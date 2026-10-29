@@ -14,6 +14,16 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 IMMUTABLE = {"Cache-Control": "public, max-age=86400, immutable"}
 
 
+@app.middleware("http")
+async def revalidate_pages(request: Request, call_next):
+    # Pages and JS/CSS must revalidate, or browsers mix old and new files after a server update.
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/") or path in ("/", "/editor"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 @app.get("/")
 def index():
     return FileResponse(config.STATIC_DIR / "index.html")

@@ -12,6 +12,7 @@
   --warn: #f0b44c;
   --danger: #ef6461;
   --step1: #5aa9ff;
+  --step15: #9ad65c;
   --step2: #4cc38a;
   --step3: #f0b44c;
   --step4: #b38cff;
@@ -183,9 +184,10 @@ body.editor { overflow: hidden; }
 .insp-sec h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: flex; align-items: center; gap: 8px; }
 .insp-sec h3 .spacer { flex: 1; }
 .insp-sec .row button { height: 28px; }
-.step-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.step-btns { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
 .step-btns button { padding: 0; font-weight: 600; }
 .step-btns button[data-step="1"] { color: var(--step1); }
+.step-btns button[data-step="1.5"] { color: var(--step15); }
 .step-btns button[data-step="2"] { color: var(--step2); }
 .step-btns button[data-step="3"] { color: var(--step3); }
 .step-btns button[data-step="4"] { color: var(--step4); }

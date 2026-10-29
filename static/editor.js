@@ -9,9 +9,11 @@ import {
   waitMedia, depthOptionsForm, jobCard, recentJobs, audioToggle,
 } from "./common.js";
 
-const STEP_COLORS = { 1: "#5aa9ff", 2: "#4cc38a", 3: "#f0b44c", 4: "#b38cff" };
+const STEP_COLORS = { 1: "#5aa9ff", 1.5: "#9ad65c", 2: "#4cc38a", 3: "#f0b44c", 4: "#b38cff" };
 const stepColor = (s) => (s === 0 ? "#7b8494" : STEP_COLORS[s] || "#3cc6c6");
 const stepLabel = (s) => (s === 0 ? "홀드" : `${s}s`);
+// 0 = hold, otherwise 1–24 in half-frame steps (1.5s alternates 2,1,2,1… frames per drawing).
+const isStep = (v) => v === 0 || (typeof v === "number" && v >= 1 && v <= 24 && Number.isInteger(v * 2));
 
 // Timeline rows (CSS px); must match .tl-labels heights in editor.html.
 const ROW_Y = { ruler: 0, cuts: 20, seg: 50, frames: 72 };
@@ -51,7 +53,7 @@ function sanitizeSpec(raw) {
   const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
   const seen = new Set();
   s.segments = (Array.isArray(s.segments) ? s.segments : [])
-    .filter((x) => x && isInt(x.start, 0, N - 1) && isInt(x.step, 0, 24))
+    .filter((x) => x && isInt(x.start, 0, N - 1) && isStep(x.step))
     .sort((a, b) => a.start - b.start)
     .filter((x) => !seen.has(x.start) && seen.add(x.start))
     .map((x) => ({ start: x.start, step: x.step }));
@@ -89,7 +91,11 @@ function derive() {
     else if (ov === "hold") key = false;
     else if (ov === "key" || i === seg.start || (S.resetAtCuts && cutSet.has(i))) { key = true; anchor = i; }
     else if (seg.step === 0) key = false;
-    else key = (i - anchor) % seg.step === 0;
+    else {
+      // New drawing whenever floor(d / step) ticks over; in half-frame units so 1.5 stays exact.
+      const d = i - anchor, h = seg.step * 2;
+      key = Math.floor((2 * d) / h) !== Math.floor((2 * (d - 1)) / h);
+    }
     if (key) { last = i; draws++; }
     map[i] = last; isKey[i] = key ? 1 : 0; drawNo[i] = draws; shotOf[i] = shot; segOf[i] = si;
   }
@@ -150,7 +156,7 @@ function splitAt(f) {
 }
 
 function setStep(step) {
-  if (!Number.isInteger(step) || step < 0 || step > 24) return toast("스텝은 0~24 사이 정수입니다.");
+  if (!isStep(step)) return toast("스텝은 1~24 사이, 0.5 단위입니다 (0 = 홀드).");
   const { a, b, label } = target();
   commit(() => {
     splitAt(a);
@@ -547,7 +553,7 @@ function renderInspector() {
       el("button", { onclick: () => toggleCut(c) }, "복원")));
   $("#cutList").replaceChildren(...(cutItems.length || removed.length ? [...cutItems, ...removed] : [el("div", { class: "note" }, "컷 없음 — 전체가 하나의 샷입니다.")]));
 
-  const options = [1, 2, 3, 4, 5, 6, 8, 0];
+  const options = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 0];
   $("#segList").replaceChildren(...S.segments.map((seg, i) => {
     const e = segEnd(i);
     const sel = el("select", {
@@ -749,6 +755,8 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && k.toLowerCase() === "y") return handled(), redo();
   if (ctrl && k.toLowerCase() === "a") { handled(); view.sel = { a: 0, b: N - 1 }; renderTarget(); return schedule("timeline"); }
   if (ctrl) return;
+  // Shift+digit = half step (Shift+1 → 1.5s). Matched by key position so keyboard layout doesn't matter.
+  if (e.shiftKey && /^Digit[1-8]$/.test(e.code)) return setStep(+e.code.slice(5) + 0.5);
 
   switch (k) {
     case " ": handled(); return play();
@@ -801,7 +809,7 @@ function bindUI() {
   $("#onion").onchange = (e) => { view.onion = e.target.checked; schedule("viewer"); };
   for (const b of $("#ovCtrl").children) b.onclick = () => view.cur > 0 && setOverride(view.cur, b.dataset.ov || null);
   for (const b of $("#stepBtns").children) b.onclick = () => setStep(+b.dataset.step);
-  $("#customStepBtn").onclick = () => setStep(parseInt($("#customStep").value, 10));
+  $("#customStepBtn").onclick = () => setStep(parseFloat($("#customStep").value));
   $("#selShotBtn").onclick = () => { const [a, b] = shotRange(view.cur); view.sel = { a, b }; renderTarget(); schedule("timeline"); };
   $("#selAllBtn").onclick = () => { view.sel = { a: 0, b: N - 1 }; renderTarget(); schedule("timeline"); };
   $("#selClearBtn").onclick = () => { view.sel = null; renderTarget(); schedule("timeline"); };
