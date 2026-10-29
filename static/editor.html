@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frame Timing Editor</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="editor">
+  <header class="topbar">
+    <a class="brand" href="/">Depth Studio</a>
+    <span class="beta">BETA</span>
+    <span class="sep"></span>
+    <span class="file" id="fileName">프레임 편집기</span>
+    <span class="muted mono" id="fileMeta"></span>
+    <div class="spacer"></div>
+    <button class="icon" id="undoBtn" title="실행 취소 (Ctrl+Z)">↶</button>
+    <button class="icon" id="redoBtn" title="다시 실행 (Ctrl+Shift+Z)">↷</button>
+    <span class="sep"></span>
+    <button id="importBtn" title="저장한 타이밍 JSON 불러오기">불러오기</button>
+    <button id="exportBtn" title="타이밍을 JSON으로 저장">JSON 저장</button>
+    <button id="csvBtn" title="프레임별 그림 번호를 CSV로 저장">X-시트 CSV</button>
+    <button id="resetBtn" class="danger" title="모든 타이밍 편집 초기화">초기화</button>
+    <button class="icon" id="helpBtn" title="단축키 (?)">?</button>
+    <input type="file" id="importFile" accept=".json,application/json" hidden>
+  </header>
+
+  <div id="uploadView" class="upload-view" hidden>
+    <section class="card stack">
+      <h2>편집할 영상 업로드</h2>
+      <div id="editorUploadBox">
+        <div class="dropzone" id="editorDropzone">
+          <strong>영상을 끌어다 놓거나 클릭해서 선택</strong>
+          <span>업로드하면 원스·투스·쓰리스 타이밍을 프레임 단위로 편집할 수 있습니다.</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="editorView" class="editor-grid" hidden>
+    <section class="viewer-pane">
+      <div class="viewer-toolbar">
+        <div class="seg-ctrl" id="modeCtrl">
+          <button data-mode="step" class="on" title="스텝 적용 결과 (V)">스텝 적용</button>
+          <button data-mode="orig" title="원본 (V)">원본</button>
+          <button data-mode="compare" title="좌: 원본 / 우: 스텝 — 화면을 드래그해 경계 이동 (V)">비교</button>
+        </div>
+        <label class="check" title="이전 그림을 반투명하게 겹쳐 보기 (N)"><input type="checkbox" id="onion"> 어니언 스킨</label>
+        <div class="spacer"></div>
+        <span class="load-status" id="loadStatus"></span>
+      </div>
+      <div class="viewer" id="viewer">
+        <canvas id="viewCanvas"></canvas>
+        <div class="hud" id="hud"></div>
+      </div>
+      <div class="transport">
+        <button class="icon" id="tFirst" title="처음 (Home)">⏮</button>
+        <button class="icon" id="tPrevKey" title="이전 그림 ([)">⇤</button>
+        <button class="icon" id="tPrev" title="이전 프레임 (←)">◀</button>
+        <button class="icon primary" id="tPlay" title="재생/정지 (Space)">▶</button>
+        <button class="icon" id="tNext" title="다음 프레임 (→)">▶</button>
+        <button class="icon" id="tNextKey" title="다음 그림 (])">⇥</button>
+        <button class="icon" id="tLast" title="끝 (End)">⏭</button>
+        <span class="sep"></span>
+        <button id="tLoop" class="on" title="반복 재생 — 선택 구간이 있으면 그 구간만 (L)">반복</button>
+        <select id="tSpeed" title="재생 속도">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+        <div class="spacer"></div>
+        <input class="frame" id="tFrame" type="number" min="0" title="프레임 번호 입력 후 Enter">
+        <span class="tc" id="tTC">00:00:00:00</span>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="insp-sec">
+        <h3>현재 프레임</h3>
+        <div class="kv" id="curInfo"></div>
+        <div class="seg-ctrl" id="ovCtrl">
+          <button data-ov="" title="자동 (A)">자동</button>
+          <button data-ov="key" title="여기서 새 그림 (K)">강제 키</button>
+          <button data-ov="hold" title="이전 그림 유지 (H)">강제 홀드</button>
+        </div>
+        <div class="note">강제 키: 이 프레임에서 새 그림을 그리고 박자를 다시 셉니다. 강제 홀드: 이전 그림을 그대로 둡니다. (타임라인 더블클릭으로도 전환)</div>
+      </div>
+
+      <div class="insp-sec">
+        <h3>스텝 지정</h3>
+        <div class="target" id="targetInfo"></div>
+        <div class="step-btns" id="stepBtns">
+          <button data-step="1" title="원스 (1)">1s</button>
+          <button data-step="2" title="투스 (2)">2s</button>
+          <button data-step="3" title="쓰리스 (3)">3s</button>
+          <button data-step="4" title="포스 (4)">4s</button>
+          <button data-step="0" title="구간 전체를 첫 그림으로 정지 (0)">홀드</button>
+        </div>
+        <div class="row">
+          <span class="note">직접 입력</span>
+          <input type="number" id="customStep" min="1" max="24" value="5">
+          <button id="customStepBtn">적용</button>
+        </div>
+        <div class="row">
+          <button id="selShotBtn" title="현재 샷 선택 (S)">현재 샷 선택</button>
+          <button id="selAllBtn" title="전체 선택 (Ctrl+A)">전체</button>
+          <button id="selClearBtn" title="선택 해제 (Esc)">해제</button>
+          <button id="clearOvBtn" title="대상 범위의 강제 키/홀드 지우기">오버라이드 지우기</button>
+        </div>
+      </div>
+
+      <div class="insp-sec">
+        <h3>컷 (샷 경계)</h3>
+        <div class="form" style="grid-template-columns: 96px 1fr">
+          <label>감지 민감도</label>
+          <div class="inline"><input type="range" id="cutThreshold" min="2" max="60" step="1"><span class="val" id="cutThresholdVal"></span></div>
+          <label>최소 샷 길이</label>
+          <div class="inline"><input type="number" id="minShot" min="1" max="96"><span class="note">프레임</span></div>
+        </div>
+        <label class="check"><input type="checkbox" id="resetAtCuts" checked> 컷마다 새 그림으로 시작 (박자 리셋)</label>
+        <div class="note">타임라인 '컷' 줄을 클릭하거나 C 키로 컷을 추가/삭제합니다. Depth 밝기 정규화도 이 컷 기준으로 됩니다.</div>
+        <div class="list" id="cutList"></div>
+        <div class="row"><button id="resetCutsBtn">수동 컷 편집 초기화</button></div>
+      </div>
+
+      <div class="insp-sec">
+        <h3>구간 <span class="spacer"></span><button id="mergeBtn" title="같은 스텝이 이어진 구간 합치기">같은 스텝 병합</button></h3>
+        <div class="list" id="segList"></div>
+      </div>
+
+      <div class="insp-sec">
+        <h3>통계</h3>
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div class="insp-sec">
+        <h3>렌더</h3>
+        <div class="stack" style="gap:6px">
+          <label class="check"><input type="checkbox" id="outStepped" checked> 스텝 적용 영상 (mp4)</label>
+          <label class="check"><input type="checkbox" id="outDepth" checked> 스텝 적용 Depth 영상 (mp4)</label>
+          <label class="check"><input type="checkbox" id="outPng"> Depth 16bit PNG 시퀀스 (zip)</label>
+          <label class="check"><input type="checkbox" id="outAudio" checked> 원본 오디오 유지 (mp4에 포함)</label>
+        </div>
+        <details class="adv">
+          <summary>Depth 설정</summary>
+          <div id="depthOptions"></div>
+        </details>
+        <button class="primary" id="renderBtn">렌더 시작</button>
+        <div class="note">Depth는 그림(키 프레임)마다 한 번만 추론하므로, 투스면 원스보다 약 2배 빠릅니다. 다른 사람 작업까지 포함한 순서는 <a href="/#queue" target="_blank">서버 대기열</a>에서 볼 수 있습니다.</div>
+        <div class="jobs" id="jobs"></div>
+      </div>
+    </aside>
+
+    <section class="timeline-pane">
+      <div class="tl-toolbar">
+        <span class="muted">확대</span>
+        <input type="range" id="zoom" min="3" max="96" step="1" value="16" style="width:140px" title="Ctrl+휠 / + -">
+        <label class="check"><input type="checkbox" id="follow" checked> 재생헤드 따라가기</label>
+        <span class="sep"></span>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--step1)"></i>1s</span>
+          <span><i class="swatch" style="background:var(--step2)"></i>2s</span>
+          <span><i class="swatch" style="background:var(--step3)"></i>3s</span>
+          <span><i class="swatch" style="background:var(--step4)"></i>4s</span>
+          <span><i class="swatch" style="background:var(--stepN)"></i>5s+</span>
+          <span><i class="swatch" style="background:var(--hold)"></i>홀드</span>
+          <span><i class="swatch" style="background:var(--danger)"></i>컷</span>
+        </div>
+        <div class="spacer"></div>
+        <span class="note">드래그: 구간 선택 · Shift+클릭: 선택 확장 · 더블클릭: 키/홀드 전환</span>
+      </div>
+      <div class="tl-body">
+        <div class="tl-labels" id="tlLabels">
+          <div style="height:20px">프레임</div>
+          <div style="height:30px">컷</div>
+          <div style="height:22px">스텝</div>
+          <div style="height:64px">그림</div>
+        </div>
+        <div class="tl-main">
+          <canvas id="tlCanvas"></canvas>
+          <div class="tl-scroll" id="tlScroll"><div id="tlSpacer"></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal" id="helpModal" hidden>
+    <div class="modal-box">
+      <h2>단축키</h2>
+      <div class="keys">
+        <kbd>Space</kbd><span>재생 / 정지</span>
+        <kbd>← →</kbd><span>1프레임 이동 (Shift: 10프레임)</span>
+        <kbd>[ ]</kbd><span>이전 / 다음 그림(키)으로 이동</span>
+        <kbd>↑ ↓</kbd><span>이전 / 다음 컷으로 이동</span>
+        <kbd>Home End</kbd><span>처음 / 끝</span>
+        <kbd>1 2 3 4 … 8</kbd><span>대상 범위를 원스/투스/쓰리스/포스… 로 지정</span>
+        <kbd>0</kbd><span>대상 범위 전체 홀드</span>
+        <kbd>K</kbd><span>현재 프레임 강제 키 (새 그림, 박자 리셋)</span>
+        <kbd>H</kbd><span>현재 프레임 강제 홀드</span>
+        <kbd>A</kbd><span>현재 프레임 자동으로 되돌리기</span>
+        <kbd>C</kbd><span>현재 프레임에 컷 추가 / 삭제</span>
+        <kbd>I O</kbd><span>선택 시작 / 끝 지정</span>
+        <kbd>S</kbd><span>현재 샷 선택</span>
+        <kbd>Esc</kbd><span>선택 해제</span>
+        <kbd>Ctrl+A</kbd><span>전체 선택</span>
+        <kbd>L</kbd><span>반복 재생 켜기/끄기</span>
+        <kbd>V</kbd><span>보기 전환 (스텝 / 원본 / 비교)</span>
+        <kbd>N</kbd><span>어니언 스킨</span>
+        <kbd>+ −</kbd><span>타임라인 확대 / 축소 (Ctrl+휠)</span>
+        <kbd>Ctrl+Z</kbd><span>실행 취소 (Ctrl+Shift+Z / Ctrl+Y: 다시 실행)</span>
+      </div>
+      <p class="note">대상 범위 = 선택 구간이 있으면 선택 구간, 없으면 현재 샷(컷과 컷 사이).</p>
+      <div class="row" style="justify-content:flex-end"><button id="helpClose">닫기</button></div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/editor.js"></script>
+</body>
+</html>

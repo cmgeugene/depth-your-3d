@@ -1,0 +1,7 @@
+# runtime data (uploads, results)
+data/
+
+# python
+.venv/
+__pycache__/
+*.pyc
