@@ -33,7 +33,7 @@ setup-upscale-engines.bat    # Real-ESRGAN, RIFE를 공식 GitHub 릴리스에�
 엔진이 없어도 서버는 뜨고 Lanczos 업스케일은 쓸 수 있습니다. 빠진 엔진은 업스케일 페이지에 안내가 나옵니다. 엔진은 Windows용(ncnn-vulkan, Vulkan 지원 GPU 필요)이라 업스케일 AI 모드는 현재 Windows 서버에서만 동작합니다.
 서버 폴더 경로에 한글 등 비 ASCII 문자가 있으면 엔진이 모델 파일을 못 여는 경우가 있으니, 그럴 땐 `DS_UPSCALE_ENGINES`로 영문 경로를 지정하세요.
 
-업스케일 처리 코드(`server/upscale_core.py`)는 데스크톱 앱 [anc_video-upscale-tool](../anc_video-upscale-tool)의 `video_upscaler_core.py`를 그대로 가져온 것입니다. 고칠 때는 데스크톱 앱 쪽을 고친 뒤 파일째 다시 복사하고, 서버에 맞춘 부분은 `server/upscale.py`에 둡니다.
+업스케일 처리 코드(`server/upscale_core.py`)는 데스크톱 앱 anc_video-upscale-tool에서 옮겨 온 것입니다. 그 저장소는 보관용으로만 남기므로, 업스케일 처리는 이 파일에서 고칩니다. 서버에 맞춘 부분(작업 폴더 캐시, 오디오 제거 등)은 `server/upscale.py`에 둡니다.
 
 ## 설정 (환경 변수)
 

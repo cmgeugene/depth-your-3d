@@ -1,4 +1,4 @@
-"""Upscale jobs: runs the vendored desktop pipeline (upscale_core) inside the shared GPU queue.
+"""Upscale jobs: runs the upscale pipeline (upscale_core) inside the shared GPU queue.
 
 The pipeline's frame caches live in the job directory and are removed when the job ends,
 so a cancelled or failed job leaves nothing behind for long (the TTL cleaner catches the rest).

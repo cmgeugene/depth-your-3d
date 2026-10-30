@@ -5,9 +5,9 @@ The module deliberately has no third-party Python dependency.  Heavy lifting is
 performed by ffmpeg, Real-ESRGAN-ncnn-vulkan and (optionally)
 RIFE-ncnn-vulkan, so it is easy to run on a normal Windows Python install.
 
-Vendored unchanged from anc_video-upscale-tool (video_upscaler_core.py, commit
-4a64ea6). The server adapts it in server/upscale.py instead of editing it here,
-so the file can be refreshed from the desktop app as a whole.
+Originally video_upscaler_core.py from the anc_video-upscale-tool desktop app
+(commit 4a64ea6). That repository is archived; this file is now the only copy,
+so edit it here. Server-specific behaviour stays in server/upscale.py.
 """
 from __future__ import annotations
 
