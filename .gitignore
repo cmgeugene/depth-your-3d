@@ -1,6 +1,9 @@
 # runtime data (uploads, results)
 data/
 
+# upscale engines downloaded by setup-upscale-engines.bat
+engines/
+
 # python
 .venv/
 __pycache__/

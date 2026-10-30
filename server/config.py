@@ -32,6 +32,12 @@ THUMB_WIDTH = 120
 CUT_THRESHOLD = float(os.environ.get("DS_CUT_THRESHOLD", "12"))
 CUT_MIN_SHOT = int(os.environ.get("DS_CUT_MIN_SHOT", "6"))
 
+# Upscale engines (Real-ESRGAN, RIFE) installed by setup-upscale-engines.bat. Keep the path ASCII:
+# older ncnn Windows builds cannot open model files under non-ASCII paths.
+UPSCALE_ENGINES_DIR = Path(os.environ.get("DS_UPSCALE_ENGINES", ROOT / "engines")).resolve()
+# Longest side of an upscaled output. The PNG frame cache grows with the square of this.
+UPSCALE_MAX_SIDE = int(os.environ.get("DS_UPSCALE_MAX_SIDE", "8192"))
+
 FFMPEG = os.environ.get("DS_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("DS_FFPROBE", "ffprobe")
 

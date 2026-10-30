@@ -1,10 +1,11 @@
 """In-memory registry of uploaded media and render jobs, plus the workers that run them.
 
-Depth jobs run one at a time in submission order on the single GPU worker, so everyone
-shares the GPU fairly. Jobs that need no GPU (stepped video from the editor) go to a small
-CPU pool instead and never wait behind depth jobs.
+Depth and upscale jobs run one at a time in submission order on the single GPU worker, so
+everyone shares the GPU fairly. Jobs that need no GPU (stepped video from the editor) go to a
+small CPU pool instead and never wait behind GPU jobs.
 State is lost on restart; files on disk are swept by the TTL cleaner.
 """
+import os
 import queue
 import re
 import shutil
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, motion, pipeline, video
+from . import config, motion, pipeline, upscale, video
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -32,6 +33,8 @@ def safe_stem(filename: str) -> str:
 
 
 def _summary(media: "Media", params: dict) -> dict:
+    if params.get("kind") == "upscale":
+        return upscale.summary(media, params["upscale"])
     outs = params["outputs"]
     fmap = params.get("map")
     want_depth = outs.get("depth_mp4") or outs.get("depth_png")
@@ -102,6 +105,10 @@ class Job:
     summary: dict = field(default_factory=dict)  # workload shown in the shared queue view
     lane: str = "gpu"  # gpu | cpu
 
+    @property
+    def kind(self) -> str:
+        return self.params.get("kind", "depth")  # depth | upscale
+
 
 class Registry:
     def __init__(self):
@@ -152,13 +159,28 @@ class Registry:
     def get_media(self, media_id: str) -> Media | None:
         return self.media.get(media_id) if ID_RE.match(media_id or "") else None
 
+    def media_from_output(self, job: Job, name: str) -> Media:
+        """Registers a job's output file as new media, e.g. to open an upscaled video in the editor."""
+        media_id = new_id()
+        media_dir = config.MEDIA_DIR / media_id
+        media_dir.mkdir(parents=True)
+        src = media_dir / f"source{Path(name).suffix}"
+        try:
+            os.link(job.dir / name, src)
+        except OSError:
+            shutil.copy2(job.dir / name, src)
+        media = Media(id=media_id, name=name, dir=media_dir, src=src)
+        self.add_media(media)
+        return media
+
     # ---- jobs ----
     def submit(self, media: Media, params: dict) -> Job:
         job_id = new_id()
         job_dir = config.JOBS_DIR / job_id
         job_dir.mkdir(parents=True)
-        outs = params["outputs"]
-        lane = "gpu" if outs.get("depth_mp4") or outs.get("depth_png") else "cpu"
+        outs = params.get("outputs", {})
+        gpu = params.get("kind") == "upscale" or outs.get("depth_mp4") or outs.get("depth_png")
+        lane = "gpu" if gpu else "cpu"
         job = Job(id=job_id, media_id=media.id, params=params, dir=job_dir, summary=_summary(media, params), lane=lane)
         with self.lock:
             self.jobs[job_id] = job
@@ -189,7 +211,7 @@ class Registry:
             "id": job.id, "media_id": job.media_id, "media_name": media.name if media else "",
             "status": job.status, "progress": round(job.progress, 4), "stage": job.stage,
             "position": position, "error": job.error, "outputs": job.outputs, "lane": job.lane,
-            "created": job.created, "started": job.started, "finished": job.finished,
+            "kind": job.kind, "created": job.created, "started": job.started, "finished": job.finished,
         }
 
     def queue_length(self) -> int:
@@ -213,7 +235,7 @@ class Registry:
             return {
                 "tag": job.id[:8], "name": media.name if media else "", "status": job.status,
                 "progress": round(job.progress, 4), "stage": job.stage, "position": position, "lane": job.lane,
-                "created": job.created, "started": job.started, "finished": job.finished, **job.summary,
+                "kind": job.kind, "created": job.created, "started": job.started, "finished": job.finished, **job.summary,
             }
 
         return {
@@ -243,7 +265,8 @@ class Registry:
         try:
             if media is None or media.status != "ready":
                 raise RuntimeError("원본 영상이 만료되었거나 준비되지 않았습니다.")
-            job.outputs = pipeline.run(job, media, progress)
+            runner = upscale.run if job.kind == "upscale" else pipeline.run
+            job.outputs = runner(job, media, progress)
             job.status, job.progress, job.stage = "done", 1.0, "완료"
         except pipeline.Cancelled:
             job.status, job.stage = "cancelled", "취소됨"

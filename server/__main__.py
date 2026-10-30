@@ -40,7 +40,7 @@ def _firewall_hint(port: int):
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")  # a console that can't show Korean must not stop the server
     port = config.PORT
-    print(f"\n  Depth Studio  ·  이 PC: http://localhost:{port}")
+    print(f"\n  휴먼에이 영상 처리 스튜디오  ·  이 PC: http://localhost:{port}")
     if config.HOST in ("0.0.0.0", "::"):
         ip = _lan_ip()
         print(f"  같은 네트워크의 다른 PC: http://{ip}:{port}" if ip else "  내부망 주소를 찾지 못했습니다 (ipconfig로 확인하세요).")

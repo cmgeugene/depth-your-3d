@@ -4,14 +4,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, depth
+from . import config, depth, upscale
 from .jobs import Media, Registry, new_id
 
-app = FastAPI(title="Depth Studio")
+app = FastAPI(title="휴먼에이 영상 처리 스튜디오")
 registry = Registry()
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
 IMMUTABLE = {"Cache-Control": "public, max-age=86400, immutable"}
+PAGES = {"/": "landing.html", "/depth": "index.html", "/upscale": "upscale.html", "/editor": "editor.html"}
 
 
 @app.middleware("http")
@@ -19,19 +20,17 @@ async def revalidate_pages(request: Request, call_next):
     # Pages and JS/CSS must revalidate, or browsers mix old and new files after a server update.
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/static/") or path in ("/", "/editor"):
+    if path.startswith("/static/") or path in PAGES:
         response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
-@app.get("/")
-def index():
-    return FileResponse(config.STATIC_DIR / "index.html")
+def _page(name: str):
+    return lambda: FileResponse(config.STATIC_DIR / name)
 
 
-@app.get("/editor")
-def editor():
-    return FileResponse(config.STATIC_DIR / "editor.html")
+for _path, _name in PAGES.items():
+    app.add_api_route(_path, _page(_name), methods=["GET"], include_in_schema=False)
 
 
 @app.get("/api/status")
@@ -46,6 +45,7 @@ def status():
         "cut_min_shot": config.CUT_MIN_SHOT,
         "max_upload_mb": config.MAX_UPLOAD_MB,
         "ttl_hours": config.TTL_HOURS,
+        "upscale": {**upscale.engines(), "max_side": config.UPSCALE_MAX_SIDE},
     }
 
 
@@ -155,6 +155,41 @@ def create_job(req: JobRequest):
     return registry.job_public(job)
 
 
+class UpscaleRequest(BaseModel):
+    media_id: str
+    scale: int = 2
+    mode: str = "anime"
+    backend: str = "ai"
+    denoise: str = "none"
+    format: str = "mp4_h265"
+    quality: str = "balanced"
+    interpolation: bool = False
+    audio: bool = True  # keep the source audio and subtitle tracks
+
+
+@app.post("/api/upscale-jobs")
+def create_upscale_job(req: UpscaleRequest):
+    media = _media(req.media_id)
+    if media.status != "ready":
+        raise HTTPException(409, "영상이 아직 준비되지 않았습니다.")
+    choices = (("scale", upscale.SCALES), ("mode", upscale.MODES), ("backend", upscale.BACKENDS),
+               ("denoise", upscale.DENOISE), ("format", upscale.FORMATS), ("quality", upscale.QUALITIES))
+    for key, allowed in choices:
+        if getattr(req, key) not in allowed:
+            raise HTTPException(400, f"{key} 값이 올바르지 않습니다.")
+    engines = upscale.engines()
+    if req.backend == "ai" and not engines["realesrgan"]:
+        raise HTTPException(409, "서버에 Real-ESRGAN 엔진이 설치되지 않았습니다. 관리자에게 setup-upscale-engines.bat 실행을 요청하세요.")
+    if req.interpolation and not engines["rife"]:
+        raise HTTPException(409, "서버에 RIFE 엔진이 설치되지 않았습니다. 관리자에게 setup-upscale-engines.bat 실행을 요청하세요.")
+    side = max(media.width, media.height) * req.scale
+    if side > config.UPSCALE_MAX_SIDE:
+        raise HTTPException(400, f"출력이 너무 큽니다 (긴 변 {side}px, 최대 {config.UPSCALE_MAX_SIDE}px). 배율을 낮추세요.")
+    params = {"kind": "upscale", "upscale": req.model_dump(exclude={"media_id"})}
+    job = registry.submit(media, params)
+    return registry.job_public(job)
+
+
 @app.get("/api/queue")
 def queue_view():
     return registry.queue_snapshot()
@@ -185,3 +220,12 @@ def job_file(job_id: str, name: str):
     if job.status != "done" or name not in {o["name"] for o in job.outputs}:
         raise HTTPException(404)
     return FileResponse(job.dir / name, filename=name)
+
+
+@app.post("/api/jobs/{job_id}/to-editor")
+def job_to_editor(job_id: str):
+    """Opens an upscaled result in the timing editor by registering it as new media."""
+    job = _job(job_id)
+    if job.kind != "upscale" or job.status != "done" or not job.outputs:
+        raise HTTPException(409, "완료된 업스케일 작업만 편집기로 보낼 수 있습니다.")
+    return registry.media_from_output(job, job.outputs[0]["name"]).public()

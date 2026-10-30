@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>업스케일 — 휴먼에이 영상 처리 스튜디오</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <a class="brand" href="/">휴먼에이 영상 처리 스튜디오</a>
+      <a class="pill" id="serverStatus" href="#queue" title="서버 대기열 보기">서버 확인 중…</a>
+      <div class="spacer"></div>
+      <nav class="nav" aria-label="서비스">
+        <a class="btn icon" href="/" aria-label="홈 (서비스 선택)" title="홈"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"></path><path d="M5 10v10h5v-6h4v6h5V10"></path></svg></a>
+        <a class="btn on" href="/upscale" aria-current="page">업스케일</a>
+        <a class="btn" href="/depth">Depth 변환</a>
+        <a class="btn" href="/editor">프레임 편집기 <span class="beta">BETA</span></a>
+      </nav>
+    </header>
+
+    <div class="grid-2">
+      <div class="stack">
+        <section class="card">
+          <h2>1. 영상 업로드</h2>
+          <div id="uploadBox">
+            <div class="dropzone" id="dropzone">
+              <strong>영상을 끌어다 놓거나 클릭해서 선택</strong>
+              <span id="uploadHint">mp4 · mov · mkv · webm</span>
+            </div>
+          </div>
+          <div id="mediaBox" class="stack" hidden></div>
+        </section>
+
+        <section class="card" id="optionsCard" hidden>
+          <h2>2. 업스케일 설정</h2>
+          <div class="stack">
+            <div class="note warn" id="engineWarn" hidden></div>
+            <div class="form">
+              <label id="lblMode">영상 종류</label>
+              <div class="seg-ctrl" role="group" aria-labelledby="lblMode" data-key="mode">
+                <button type="button" data-v="anime">애니메이션 / 일러스트</button>
+                <button type="button" data-v="real">실사 / 범용</button>
+              </div>
+              <label id="lblScale">확대 배율</label>
+              <div class="seg-ctrl" role="group" aria-labelledby="lblScale" data-key="scale">
+                <button type="button" data-v="2">2배</button>
+                <button type="button" data-v="4">4배</button>
+              </div>
+              <label id="lblBackend">처리 방식</label>
+              <div class="seg-ctrl" role="group" aria-labelledby="lblBackend" data-key="backend">
+                <button type="button" data-v="ai">AI (Real-ESRGAN)</button>
+                <button type="button" data-v="lanczos">Lanczos</button>
+              </div>
+              <label id="lblDenoise">노이즈 제거</label>
+              <div class="seg-ctrl" role="group" aria-labelledby="lblDenoise" data-key="denoise">
+                <button type="button" data-v="none">사용 안 함</button>
+                <button type="button" data-v="low">약하게</button>
+                <button type="button" data-v="medium">보통</button>
+                <button type="button" data-v="high">강하게</button>
+              </div>
+              <label for="format">출력 형식</label>
+              <select id="format">
+                <option value="mp4_h264">MP4 H.264 (호환성 우선)</option>
+                <option value="mp4_h265">MP4 H.265 (용량 절약)</option>
+                <option value="mkv_h265">MKV H.265 (모든 트랙 보존)</option>
+              </select>
+              <label for="quality">압축 품질</label>
+              <select id="quality">
+                <option value="high">고화질 / 큰 용량</option>
+                <option value="balanced">균형</option>
+                <option value="small">작은 용량</option>
+              </select>
+              <label>추가 처리</label>
+              <div class="stack" style="gap:6px">
+                <label class="check"><input type="checkbox" id="rife"> RIFE 프레임 보간 (FPS 2배)</label>
+                <label class="check"><input type="checkbox" id="outAudio" checked> 원본 오디오 · 자막 유지</label>
+              </div>
+              <div class="note full" id="outInfo"></div>
+              <div class="note warn full" id="outWarn" hidden></div>
+            </div>
+            <div class="row">
+              <button class="primary" id="startBtn">업스케일 시작</button>
+              <span class="note" id="startNote"></span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <h2>3. 내 작업</h2>
+          <div class="jobs" id="jobs"></div>
+          <p class="note" id="jobsEmpty">아직 작업이 없습니다. 결과 파일은 서버에 <span id="ttl">24</span>시간 보관됩니다.</p>
+        </section>
+
+        <section class="card" id="queue">
+          <h2>서버 대기열 <span class="note" id="queueSummary"></span></h2>
+          <div class="queue" id="queueList"></div>
+          <p class="note">업스케일과 Depth 작업은 GPU 하나에서 위에서부터 순서대로 처리됩니다. <span class="mine-tag">내 작업</span> 표시는 이 브라우저에서 넣은 작업입니다.</p>
+        </section>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/static/upscale.js"></script>
+</body>
+</html>

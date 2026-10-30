@@ -3,16 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Depth Studio</title>
+  <title>Depth 변환 — 휴먼에이 영상 처리 스튜디오</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="page">
     <header class="header">
-      <a class="brand" href="/">Depth Studio</a>
+      <a class="brand" href="/">휴먼에이 영상 처리 스튜디오</a>
       <a class="pill" id="serverStatus" href="#queue" title="서버 대기열 보기">서버 확인 중…</a>
       <div class="spacer"></div>
-      <a class="btn" href="/editor">프레임 편집기 <span class="beta">BETA</span></a>
+      <nav class="nav" aria-label="서비스">
+        <a class="btn icon" href="/" aria-label="홈 (서비스 선택)" title="홈"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"></path><path d="M5 10v10h5v-6h4v6h5V10"></path></svg></a>
+        <a class="btn" href="/upscale">업스케일</a>
+        <a class="btn on" href="/depth" aria-current="page">Depth 변환</a>
+        <a class="btn" href="/editor">프레임 편집기 <span class="beta">BETA</span></a>
+      </nav>
     </header>
 
     <div class="grid-2">
@@ -65,7 +70,7 @@
         <section class="card" id="queue">
           <h2>서버 대기열 <span class="note" id="queueSummary"></span></h2>
           <div class="queue" id="queueList"></div>
-          <p class="note">Depth 작업은 GPU 하나에서 위에서부터 순서대로 처리됩니다. 프레임 편집기의 스텝 영상 렌더는 GPU가 필요 없어 이 순서를 기다리지 않고 따로(CPU) 처리됩니다. <span class="mine-tag">내 작업</span> 표시는 이 브라우저에서 넣은 작업입니다.</p>
+          <p class="note">Depth와 업스케일 작업은 GPU 하나에서 위에서부터 순서대로 처리됩니다. 프레임 편집기의 스텝 영상 렌더는 GPU가 필요 없어 이 순서를 기다리지 않고 따로(CPU) 처리됩니다. <span class="mine-tag">내 작업</span> 표시는 이 브라우저에서 넣은 작업입니다.</p>
         </section>
       </div>
     </div>

@@ -1,4 +1,4 @@
-// Shared helpers for the converter page and the timing editor.
+// Shared helpers for the landing page, the converter and upscale pages, and the timing editor.
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -244,11 +244,18 @@ export function recentJobs(add) {
 }
 
 // Renders a self-updating card for a job. Returns the element.
-export function jobCard(jobId, { onGone } = {}) {
+// kind: show only jobs of this kind ("depth" | "upscale"); actions(j): extra controls for a finished job.
+export function jobCard(jobId, { onGone, kind, actions } = {}) {
   const card = el("div", { class: "job" });
   let stopped = false;
 
   const render = (j) => {
+    if (kind && (j.kind || "depth") !== kind) {
+      stopped = true;
+      card.remove();
+      onGone && onGone(jobId);
+      return;
+    }
     const elapsed = j.started ? ((j.finished || Date.now() / 1000) - j.started) : 0;
     const head = el("div", { class: "job-head" },
       el("span", { class: `badge ${j.status}` }, STATUS_LABEL[j.status] || j.status),
@@ -272,6 +279,7 @@ export function jobCard(jobId, { onGone } = {}) {
       parts.push(el("div", { class: "job-files" }, j.outputs.map((o) =>
         el("a", { href: `/api/jobs/${j.id}/files/${encodeURIComponent(o.name)}`, download: o.name },
           el("span", {}, `⬇ ${o.label}`), el("span", { class: "muted mono" }, fmtBytes(o.size))))));
+      if (actions) parts.push(el("div", { class: "row" }, actions(j)));
     }
     if (j.status === "error") parts.push(el("div", { class: "job-err" }, j.error));
     card.replaceChildren(...parts);
@@ -297,4 +305,81 @@ export function jobCard(jobId, { onGone } = {}) {
     }
   })();
   return card;
+}
+
+// ---------- shared server queue ----------
+
+function kindTag(j) {
+  if (j.kind === "upscale") return el("span", { class: "badge tag-up" }, "업스케일");
+  if (j.lane === "cpu") return el("span", { class: "badge tag-edit" }, "편집기");
+  return el("span", { class: "badge tag-depth" }, "Depth");
+}
+
+function queueRow(j, now, mine) {
+  const isMine = mine.has(j.tag);
+  const work = [
+    j.resolution,
+    j.drawings !== j.frames ? `${j.frames}프레임 (그림 ${j.drawings})` : `${j.frames}프레임`,
+    j.model,
+    j.outputs.join(" + "),
+  ].filter(Boolean).join(" · ");
+  const cpu = j.lane === "cpu";
+  let state;
+  if (j.status === "running") {
+    state = `${cpu ? "CPU · " : ""}${j.stage} · ${(j.progress * 100).toFixed(0)}% · ${fmtDuration(now - j.started)} 경과`;
+  } else if (j.status === "queued") {
+    state = cpu ? "CPU 작업 · 곧 시작 (GPU 대기열과 별도)" : `${fmtDuration(now - j.created)}째 대기 중`;
+  } else {
+    const label = { done: "완료", error: "실패", cancelled: "취소" }[j.status];
+    const took = j.started ? ` · ${fmtDuration(j.finished - j.started)} 걸림` : "";
+    state = `${label}${took} · ${fmtDuration(now - j.finished)} 전`;
+  }
+  const parts = [
+    el("div", { class: "qpos" }, j.status === "running" ? "▶" : j.status === "queued" ? (cpu ? "·" : String(j.position)) : "✓"),
+    el("div", { class: "qname" }, kindTag(j), el("span", { title: j.name }, j.name || "(만료된 영상)"),
+      isMine ? el("span", { class: "mine-tag" }, "내 작업") : null),
+    el("div", { class: "qmeta" }, state),
+  ];
+  if (j.status === "running") {
+    const bar = el("div", { class: "progress" }, el("div"));
+    bar.firstChild.style.width = `${(j.progress * 100).toFixed(1)}%`;
+    parts.push(bar);
+  }
+  parts.push(el("div", { class: "qmeta" }, work));
+  const cls = ["qrow", j.status === "running" ? "running" : "", j.status === "queued" ? "" : j.status === "running" ? "" : "done-row", isMine ? "mine" : ""];
+  return el("div", { class: cls.filter(Boolean).join(" ") }, parts);
+}
+
+// Keeps #serverStatus, #queueSummary and #queueList (whichever the page has) up to date.
+export function watchQueue(status) {
+  const refresh = async () => {
+    let q;
+    try {
+      q = await api("/api/queue");
+    } catch {
+      if ($("#serverStatus")) $("#serverStatus").textContent = "서버 연결 끊김";
+      return;
+    }
+    const busy = q.running.length + q.queued.length;
+    if ($("#serverStatus")) {
+      $("#serverStatus").textContent = `${status.gpu} · ${busy ? `처리 중 ${q.running.length} · 대기 ${q.queued.length}` : "대기 없음"}`;
+    }
+    if ($("#queueSummary")) $("#queueSummary").textContent = busy ? `— 처리 중 ${q.running.length}건, 대기 ${q.queued.length}건` : "— 비어 있음";
+    if (!$("#queueList")) return;
+
+    const mine = new Set(recentJobs().map((id) => id.slice(0, 8)));
+    const list = [el("h4", {}, "처리 중 · 대기")];
+    if (busy) {
+      for (const j of [...q.running, ...q.queued]) list.push(queueRow(j, q.now, mine));
+    } else {
+      list.push(el("div", { class: "note" }, "지금 돌고 있는 작업이 없습니다. 작업을 넣으면 바로 처리됩니다."));
+    }
+    if (q.recent.length) {
+      list.push(el("h4", {}, "최근 끝난 작업"));
+      for (const j of q.recent) list.push(queueRow(j, q.now, mine));
+    }
+    $("#queueList").replaceChildren(...list);
+  };
+  refresh();
+  setInterval(refresh, 2000);
 }

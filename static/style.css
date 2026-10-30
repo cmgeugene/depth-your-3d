@@ -70,6 +70,27 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .brand:hover { text-decoration: none; }
 .pill { padding: 3px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .beta { padding: 1px 6px; border-radius: 4px; background: #3b2c10; color: var(--warn); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.btn.icon { width: 30px; padding: 0; }
+.nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.nav .btn.on { background: #22364d; border-color: var(--accent); color: #cfe5ff; }
+
+/* ---------- landing ---------- */
+.intro { margin-bottom: 20px; }
+.intro h1 { margin: 0 0 4px; font-size: 18px; font-weight: 700; }
+.intro p { margin: 0; font-size: 13px; color: var(--muted); }
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.tool { display: flex; flex-direction: column; gap: 10px; color: var(--text); }
+.tool:hover { border-color: var(--line-2); background: #1d2026; text-decoration: none; }
+.tool-head { display: flex; align-items: center; gap: 8px; }
+.tool-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.tool-desc { margin: 0; color: var(--muted); font-size: 13px; }
+.tool-list { margin: 0; padding: 0 0 0 16px; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.tool-open { margin-top: auto; font-size: 13px; font-weight: 600; color: var(--accent); }
+
+/* job kind tags in the shared queue */
+.tag-up { background: #16314f; color: #9ccbff; }
+.tag-depth { background: #143526; color: var(--ok); }
+.tag-edit { background: #3b2c10; color: var(--warn); }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 @media (max-width: 820px) { .grid-2 { grid-template-columns: 1fr; } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
@@ -99,6 +120,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .form { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px 12px; align-items: center; }
 .form > label { color: var(--muted); font-size: 13px; }
 .form .full { grid-column: 1 / -1; }
+.form .seg-ctrl { justify-self: start; flex-wrap: wrap; }
 .form .inline { display: flex; align-items: center; gap: 8px; }
 .form .inline input[type="range"] { flex: 1; min-width: 0; }
 .form .val { min-width: 40px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); }

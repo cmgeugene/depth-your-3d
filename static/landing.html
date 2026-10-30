@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>휴먼에이 영상 처리 스튜디오</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <a class="brand" href="/">휴먼에이 영상 처리 스튜디오</a>
+      <a class="pill" id="serverStatus" href="#queue" title="서버 대기열 보기">서버 확인 중…</a>
+      <div class="spacer"></div>
+      <nav class="nav" aria-label="서비스">
+        <a class="btn" href="/upscale">업스케일</a>
+        <a class="btn" href="/depth">Depth 변환</a>
+        <a class="btn" href="/editor">프레임 편집기 <span class="beta">BETA</span></a>
+      </nav>
+    </header>
+
+    <section class="intro">
+      <h1>어떤 작업을 할까요?</h1>
+      <p>GPU 서버에서 처리합니다. GPU 작업은 대기열에서 순서대로 돌고, 업로드와 결과는 <span id="ttl">24</span>시간 뒤 자동 삭제됩니다.</p>
+    </section>
+
+    <section class="tools" aria-label="도구">
+      <a class="card tool" href="/upscale">
+        <div class="tool-head">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5aa9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
+          <h3>업스케일</h3>
+          <div class="spacer"></div>
+          <span class="badge">GPU</span>
+        </div>
+        <p class="tool-desc">2D 애니메이션 영상을 2배 · 4배로 키웁니다.</p>
+        <ul class="tool-list">
+          <li>Real-ESRGAN animevideov3 · Lanczos</li>
+          <li>RIFE 프레임 보간 (FPS 2배)</li>
+          <li>오디오 · 자막 · 메타데이터 보존</li>
+        </ul>
+        <span class="tool-open">업스케일 열기 →</span>
+      </a>
+
+      <a class="card tool" href="/depth">
+        <div class="tool-head">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4cc38a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>
+          <h3>Depth 변환</h3>
+          <div class="spacer"></div>
+          <span class="badge">GPU</span>
+        </div>
+        <p class="tool-desc">실사 영상을 흑백 depth 영상이나 16bit PNG 시퀀스로 바꿉니다.</p>
+        <p class="tool-desc">댄스 장면, 빠른 카메라 이동 등 I2V보다 V2V가 더 좋은 퀄리티가 나오는 경우 실사 혼입 방지를 위해 Depth 영상을 사용합니다.</p>
+        <ul class="tool-list">
+          <li>Depth Anything V2 (Small · Base · Large)</li>
+          <li>컷 단위 밝기 정규화</li>
+          <li>mp4 · 16bit PNG zip 출력</li>
+        </ul>
+        <span class="tool-open">Depth 변환 열기 →</span>
+      </a>
+
+      <a class="card tool" href="/editor">
+        <div class="tool-head">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0b44c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M7 6v12"></path><path d="M12 6v12"></path><path d="M17 6v12"></path></svg>
+          <h3>프레임 편집기</h3>
+          <span class="beta">BETA</span>
+          <div class="spacer"></div>
+          <span class="badge">CPU</span>
+        </div>
+        <p class="tool-desc">매끄러운 움직임을 1s · 1.5s · 2s 애니메이션 타이밍으로 다시 잡아 스텝 영상으로 렌더합니다.</p>
+        <ul class="tool-list">
+          <li>움직임 분석으로 자동 타이밍</li>
+          <li>샷 · 구간 · 프레임 단위 조정</li>
+          <li>GPU 대기열 없이 바로 렌더</li>
+        </ul>
+        <span class="tool-open">편집기 열기 →</span>
+      </a>
+    </section>
+
+    <section class="card" id="queue">
+      <h2>서버 대기열 <span class="note" id="queueSummary"></span></h2>
+      <div class="queue" id="queueList"></div>
+      <p class="note">업스케일과 Depth 작업은 GPU 하나에서 위에서부터 순서대로 처리됩니다. 프레임 편집기의 스텝 영상 렌더는 GPU가 필요 없어 이 순서를 기다리지 않고 따로(CPU) 처리됩니다. <span class="mine-tag">내 작업</span> 표시는 이 브라우저에서 넣은 작업입니다.</p>
+    </section>
+  </div>
+  <script type="module" src="/static/landing.js"></script>
+</body>
+</html>

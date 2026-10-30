@@ -1,10 +1,11 @@
-# Depth Studio
+# 휴먼에이 영상 처리 스튜디오
 
-사내 공용 GPU 서버(RTX 4090 24GB 기준)에서 돌리는 실사 영상 → Depth 맵 변환 웹페이지.
+사내 공용 GPU 서버(RTX 4090 24GB 기준)에서 돌리는 영상 처리 웹 서비스. 접속하면 첫 화면(`/`)에서 도구를 고릅니다.
 
-- **변환**: 영상 업로드 → Depth Anything V2로 흑백 depth 영상(mp4) / 16bit PNG 시퀀스(zip) 생성 → 다운로드
-- **프레임 편집기 (Beta)**: depth로 만든 2D 영상이 실사처럼 너무 부드럽게 움직이는 부분을 1s/1.5s/2s… 애니메이션 타이밍으로 다시 잡아 스텝 영상(mp4)으로 렌더. Depth는 쓰지 않습니다.
-- Depth 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 메인 페이지 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
+- **업스케일** (`/upscale`): 2D 애니메이션 영상을 Real-ESRGAN(animevideov3) 또는 Lanczos로 2배·4배 확대, 선택적으로 RIFE 프레임 보간(FPS 2배). 오디오·자막·메타데이터 보존. 결과를 바로 프레임 편집기로 보낼 수 있습니다.
+- **Depth 변환** (`/depth`): 실사 영상 업로드 → Depth Anything V2로 흑백 depth 영상(mp4) / 16bit PNG 시퀀스(zip) 생성 → 다운로드
+- **프레임 편집기 (Beta)** (`/editor`): 실사처럼 너무 부드럽게 움직이는 부분을 1s/1.5s/2s… 애니메이션 타이밍으로 다시 잡아 스텝 영상(mp4)으로 렌더. Depth는 쓰지 않습니다.
+- 업스케일과 Depth 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 각 페이지의 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
 - mp4 결과물에 원본 오디오를 넣을지 선택할 수 있습니다.
 
 ## 실행
@@ -23,6 +24,17 @@ run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
 
 > Windows에서는 경로 길이 제한(260자) 때문에 `C:\depth-studio`처럼 짧은 경로에 두는 것을 권장합니다.
 
+### 업스케일 엔진 설치 (서버에서 한 번)
+
+```
+setup-upscale-engines.bat    # Real-ESRGAN, RIFE를 공식 GitHub 릴리스에서 .\engines에 설치 (약 90MB)
+```
+
+엔진이 없어도 서버는 뜨고 Lanczos 업스케일은 쓸 수 있습니다. 빠진 엔진은 업스케일 페이지에 안내가 나옵니다. 엔진은 Windows용(ncnn-vulkan, Vulkan 지원 GPU 필요)이라 업스케일 AI 모드는 현재 Windows 서버에서만 동작합니다.
+서버 폴더 경로에 한글 등 비 ASCII 문자가 있으면 엔진이 모델 파일을 못 여는 경우가 있으니, 그럴 땐 `DS_UPSCALE_ENGINES`로 영문 경로를 지정하세요.
+
+업스케일 처리 코드(`server/upscale_core.py`)는 데스크톱 앱 [anc_video-upscale-tool](../anc_video-upscale-tool)의 `video_upscaler_core.py`를 그대로 가져온 것입니다. 고칠 때는 데스크톱 앱 쪽을 고친 뒤 파일째 다시 복사하고, 서버에 맞춘 부분은 `server/upscale.py`에 둡니다.
+
 ## 설정 (환경 변수)
 
 | 변수 | 기본값 | 설명 |
@@ -37,6 +49,8 @@ run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
 | `DS_CPU_WORKERS` | `2` | 편집기 스텝 영상 렌더를 동시에 몇 개까지 돌릴지 (GPU 대기열과 별도) |
 | `DS_MAX_EDITOR_FRAMES` | `3000` | 편집기를 쓸 수 있는 최대 프레임 수 (24fps 기준 약 2분) |
 | `DS_CUT_THRESHOLD` / `DS_CUT_MIN_SHOT` | `12` / `6` | 컷 자동 감지 민감도 / 최소 샷 길이 |
+| `DS_UPSCALE_ENGINES` | `./engines` | 업스케일 엔진(Real-ESRGAN, RIFE) 설치 위치 (영문 경로) |
+| `DS_UPSCALE_MAX_SIDE` | `8192` | 업스케일 출력의 최대 긴 변(px). 넘으면 작업을 받지 않습니다 |
 
 ## 라이선스 주의
 
@@ -68,3 +82,5 @@ run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
 - 서버를 재시작하면 진행 중이던 작업 목록이 사라집니다 (파일은 TTL까지 남음).
 - 가변 프레임레이트(VFR) 영상은 원본 평균 fps로 다시 인코딩됩니다.
 - 프레임별 추론이라 Video Depth Anything 같은 영상 전용 모델보다 미세한 떨림이 남을 수 있습니다. 필요하면 고급 설정의 "시간 스무딩"을 올리세요.
+- 업스케일은 작업 중 프레임을 무손실 PNG로 작업 폴더에 풀어 둡니다. 긴 영상·4배는 수십~수백 GB가 필요할 수 있으니 `DS_DATA_DIR` 드라이브의 여유 공간을 확인하세요 (작업이 끝나면 바로 지웁니다).
+- 업스케일된 결과를 편집기로 보내면 편집기 프레임 한도(`DS_MAX_EDITOR_FRAMES`)가 그대로 적용됩니다. RIFE 보간을 켜면 프레임 수가 2배가 됩니다.
