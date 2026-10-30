@@ -12,12 +12,14 @@
 준비물: NVIDIA 드라이버, Python 3.10+, **ffmpeg 5 이상이 PATH에 있어야 함** (`ffmpeg -version`으로 확인).
 
 ```
-run.bat        # Windows
-./run.sh       # Linux
+run-lan.bat    # Windows, 내부망 공유 (다른 PC에서 http://192.168.x.x:8000)
+run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
+./run.sh       # Linux, 내부망 공유
 ```
 
-첫 실행 때 `.venv`를 만들고 torch(CUDA 12.8)와 의존성을 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (Large 약 1.3GB).
-서버가 뜨면 같은 네트워크에서 `http://<서버IP>:8000` 으로 접속합니다. 방화벽에서 8000 포트를 열어 주세요.
+첫 실행 때 `.venv`를 만들고 torch(CUDA 12.8)와 의존성을 설치합니다. 이후에는 `requirements.txt`가 바뀌었을 때만 다시 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (Large 약 1.3GB).
+서버가 뜨면 창에 접속 주소가 나옵니다 (`같은 네트워크의 다른 PC: http://192.168.x.x:8000`). 이 주소를 공유하면 됩니다.
+다른 PC에서 안 열리면 방화벽에서 포트를 열어야 합니다. 필요한 명령도 같은 창에 나옵니다 (관리자 권한으로 한 번만 실행).
 
 > Windows에서는 경로 길이 제한(260자) 때문에 `C:\depth-studio`처럼 짧은 경로에 두는 것을 권장합니다.
 
