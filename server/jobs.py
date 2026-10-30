@@ -1,6 +1,8 @@
-"""In-memory registry of uploaded media and render jobs, plus the single GPU worker.
+"""In-memory registry of uploaded media and render jobs, plus the workers that run them.
 
-Jobs run one at a time in submission order, so everyone shares the one GPU fairly.
+Depth jobs run one at a time in submission order on the single GPU worker, so everyone
+shares the GPU fairly. Jobs that need no GPU (stepped video from the editor) go to a small
+CPU pool instead and never wait behind depth jobs.
 State is lost on restart; files on disk are swept by the TTL cleaner.
 """
 import queue
@@ -14,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, pipeline, video
+from . import config, motion, pipeline, video
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -64,6 +66,7 @@ class Media:
     scores: list[float] = field(default_factory=list)
     cuts: list[int] = field(default_factory=list)
     editor: bool = False
+    motion: dict | None = None  # {"camera": [...], "action": [...]} per frame, editor media only
 
     @property
     def stem(self) -> str:
@@ -75,7 +78,7 @@ class Media:
             d.update(
                 width=self.width, height=self.height, fps=self.fps, fps_str=self.fps_str,
                 duration=self.duration, has_audio=self.has_audio, frames=self.frames,
-                scores=self.scores, cuts=self.cuts, editor=self.editor,
+                scores=self.scores, cuts=self.cuts, editor=self.editor, motion=self.motion,
                 preview_width=config.PREVIEW_WIDTH, max_editor_frames=config.MAX_EDITOR_FRAMES,
             )
         return d
@@ -97,6 +100,7 @@ class Job:
     finished: float | None = None
     cancel: threading.Event = field(default_factory=threading.Event)
     summary: dict = field(default_factory=dict)  # workload shown in the shared queue view
+    lane: str = "gpu"  # gpu | cpu
 
 
 class Registry:
@@ -107,6 +111,10 @@ class Registry:
         self.queue: "queue.Queue[Job]" = queue.Queue()
         self.order: list[str] = []  # queued job ids, for queue positions
         self.prep_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="prep")
+        self.cpu_pool = ThreadPoolExecutor(max_workers=config.CPU_WORKERS, thread_name_prefix="cpu-job")
+        if not motion.AVAILABLE:
+            print("OpenCV(cv2)가 없어 편집기 자동 타이밍용 움직임 분석을 건너뜁니다. "
+                  "켜려면: pip install opencv-python-headless")
         config.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
         config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
         threading.Thread(target=self._worker, daemon=True, name="gpu-worker").start()
@@ -129,6 +137,13 @@ class Registry:
             m.frames = len(m.scores)
             m.editor = with_previews and m.frames <= config.MAX_EDITOR_FRAMES
             m.cuts = video.detect_cuts(m.scores, config.CUT_THRESHOLD, config.CUT_MIN_SHOT)
+            if m.editor and motion.AVAILABLE:
+                raw = m.dir / "motion.gray"
+                try:
+                    m.motion = motion.analyze(raw, m.frames)
+                except Exception:  # the editor still works, just without auto timing
+                    traceback.print_exc()
+                raw.unlink(missing_ok=True)
             m.status = "ready"
         except Exception as exc:  # surfaced to the uploader
             traceback.print_exc()
@@ -142,11 +157,17 @@ class Registry:
         job_id = new_id()
         job_dir = config.JOBS_DIR / job_id
         job_dir.mkdir(parents=True)
-        job = Job(id=job_id, media_id=media.id, params=params, dir=job_dir, summary=_summary(media, params))
+        outs = params["outputs"]
+        lane = "gpu" if outs.get("depth_mp4") or outs.get("depth_png") else "cpu"
+        job = Job(id=job_id, media_id=media.id, params=params, dir=job_dir, summary=_summary(media, params), lane=lane)
         with self.lock:
             self.jobs[job_id] = job
-            self.order.append(job_id)
-        self.queue.put(job)
+            if lane == "gpu":
+                self.order.append(job_id)
+        if lane == "gpu":
+            self.queue.put(job)
+        else:
+            self.cpu_pool.submit(self._run, job)
         return job
 
     def get_job(self, job_id: str) -> Job | None:
@@ -167,7 +188,7 @@ class Registry:
         return {
             "id": job.id, "media_id": job.media_id, "media_name": media.name if media else "",
             "status": job.status, "progress": round(job.progress, 4), "stage": job.stage,
-            "position": position, "error": job.error, "outputs": job.outputs,
+            "position": position, "error": job.error, "outputs": job.outputs, "lane": job.lane,
             "created": job.created, "started": job.started, "finished": job.finished,
         }
 
@@ -180,6 +201,7 @@ class Registry:
         full job id, so other users can't open or download someone else's results."""
         with self.lock:
             queued = [self.jobs[i] for i in self.order if i in self.jobs]
+            cpu_waiting = [j for j in self.jobs.values() if j.lane == "cpu" and j.status == "queued"]
             running = [j for j in self.jobs.values() if j.status == "running"]
             finished = sorted(
                 (j for j in self.jobs.values() if j.status in ("done", "error", "cancelled") and j.finished),
@@ -190,44 +212,47 @@ class Registry:
             media = self.media.get(job.media_id)
             return {
                 "tag": job.id[:8], "name": media.name if media else "", "status": job.status,
-                "progress": round(job.progress, 4), "stage": job.stage, "position": position,
+                "progress": round(job.progress, 4), "stage": job.stage, "position": position, "lane": job.lane,
                 "created": job.created, "started": job.started, "finished": job.finished, **job.summary,
             }
 
         return {
             "now": time.time(),
             "running": [row(j, 0) for j in running],
-            "queued": [row(j, i + 1) for i, j in enumerate(queued)],
+            "queued": [row(j, i + 1) for i, j in enumerate(queued)] + [row(j, 0) for j in cpu_waiting],
             "recent": [row(j, 0) for j in finished],
         }
 
     def _worker(self):
         while True:
-            job = self.queue.get()
-            with self.lock:
-                if job.id in self.order:
-                    self.order.remove(job.id)
-                if job.cancel.is_set():
-                    continue
-                # Flip to running under the lock so the queue view never loses the job in between.
-                job.status, job.started, job.stage = "running", time.time(), "시작"
-            media = self.media.get(job.media_id)
+            self._run(self.queue.get())
 
-            def progress(value: float, text: str, job=job):
-                job.progress, job.stage = value, text
+    def _run(self, job: Job):
+        with self.lock:
+            if job.id in self.order:
+                self.order.remove(job.id)
+            if job.cancel.is_set():
+                return
+            # Flip to running under the lock so the queue view never loses the job in between.
+            job.status, job.started, job.stage = "running", time.time(), "시작"
+        media = self.media.get(job.media_id)
 
-            try:
-                if media is None or media.status != "ready":
-                    raise RuntimeError("원본 영상이 만료되었거나 준비되지 않았습니다.")
-                job.outputs = pipeline.run(job, media, progress)
-                job.status, job.progress, job.stage = "done", 1.0, "완료"
-            except pipeline.Cancelled:
-                job.status, job.stage = "cancelled", "취소됨"
-            except Exception as exc:
-                traceback.print_exc()
-                job.status, job.error, job.stage = "error", str(exc), "실패"
-            finally:
-                job.finished = time.time()
+        def progress(value: float, text: str):
+            job.progress, job.stage = value, text
+
+        try:
+            if media is None or media.status != "ready":
+                raise RuntimeError("원본 영상이 만료되었거나 준비되지 않았습니다.")
+            job.outputs = pipeline.run(job, media, progress)
+            job.status, job.progress, job.stage = "done", 1.0, "완료"
+        except pipeline.Cancelled:
+            job.status, job.stage = "cancelled", "취소됨"
+        except Exception as exc:
+            traceback.print_exc()
+            job.status, job.error, job.stage = "error", str(exc), "실패"
+        finally:
+            job.finished = time.time()
+            if job.lane == "gpu":
                 try:
                     import torch
 

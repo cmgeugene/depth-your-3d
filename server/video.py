@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config
+from . import config, motion
 
 
 def probe(path: Path) -> dict:
@@ -68,17 +68,21 @@ def _rotation(stream: dict) -> int:
 
 
 def prepare(src: Path, out_dir: Path, with_previews: bool) -> list[float]:
-    """Decode once: scene-change score per frame, plus preview/thumb JPEGs for the editor.
+    """Decode once: scene-change score per frame, plus preview/thumb JPEGs and small gray
+    frames for motion analysis (motion.gray) for the editor.
 
     Returns the per-frame scdet scores (0-100); its length is the true frame count.
     """
-    graph = "[0:v]split=3[s][p][t];" if with_previews else "[0:v]null[s];"
+    with_motion = with_previews and motion.AVAILABLE
+    graph = f"[0:v]split={4 if with_motion else 3}[s][p][t]{'[m]' if with_motion else ''};" if with_previews else "[0:v]null[s];"
     graph += "[s]scale=320:-2,scdet=threshold=100:sc_pass=0,metadata=print:key=lavfi.scd.score:file=scores.txt[so]"
     cmd = [config.FFMPEG, "-v", "error", "-y", "-i", str(src)]
     if with_previews:
         (out_dir / "preview").mkdir(exist_ok=True)
         (out_dir / "thumb").mkdir(exist_ok=True)
         graph += f";[p]scale={config.PREVIEW_WIDTH}:-2[po];[t]scale={config.THUMB_WIDTH}:-2[to]"
+    if with_motion:
+        graph += f";[m]scale={motion.WIDTH}:-2,format=gray[mo]"
     cmd += ["-filter_complex", graph, "-map", "[so]", "-fps_mode", "passthrough", "-f", "null", "-"]
     if with_previews:
         for name, q in (("preview", 4), ("thumb", 6)):
@@ -86,6 +90,8 @@ def prepare(src: Path, out_dir: Path, with_previews: bool) -> list[float]:
                 "-map", f"[{name[0]}o]", "-fps_mode", "passthrough", "-q:v", str(q),
                 "-start_number", "0", f"{name}/%06d.jpg",
             ]
+    if with_motion:
+        cmd += ["-map", "[mo]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "gray", "motion.gray"]
     # cwd keeps the metadata file path free of drive-letter colons, which the filter parser would split on.
     result = subprocess.run(cmd, cwd=out_dir, capture_output=True)
     if result.returncode != 0:

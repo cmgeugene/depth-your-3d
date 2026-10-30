@@ -257,7 +257,11 @@ export function jobCard(jobId, { onGone } = {}) {
         ? el("button", { class: "danger", onclick: async () => { await postJSON(`/api/jobs/${j.id}/cancel`, {}); poll(); } }, "취소")
         : null);
     const parts = [head];
-    if (j.status === "queued") parts.push(el("div", { class: "job-stage" }, `대기열 ${j.position}번째 — 앞 작업이 끝나면 자동으로 시작합니다.`));
+    if (j.status === "queued") {
+      parts.push(el("div", { class: "job-stage" }, j.lane === "cpu"
+        ? "GPU가 필요 없는 작업이라 대기열을 거치지 않고 곧 시작합니다."
+        : `대기열 ${j.position}번째 — 앞 작업이 끝나면 자동으로 시작합니다.`));
+    }
     if (j.status === "running") {
       const bar = el("div", { class: "progress" }, el("div"));
       bar.firstChild.style.width = `${(j.progress * 100).toFixed(1)}%`;

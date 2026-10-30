@@ -93,18 +93,19 @@ function queueRow(j, now, mine) {
     j.model,
     j.outputs.join(" + "),
   ].filter(Boolean).join(" · ");
+  const cpu = j.lane === "cpu";
   let state;
   if (j.status === "running") {
-    state = `${j.stage} · ${(j.progress * 100).toFixed(0)}% · ${fmtDuration(now - j.started)} 경과`;
+    state = `${cpu ? "CPU · " : ""}${j.stage} · ${(j.progress * 100).toFixed(0)}% · ${fmtDuration(now - j.started)} 경과`;
   } else if (j.status === "queued") {
-    state = `${fmtDuration(now - j.created)}째 대기 중`;
+    state = cpu ? "CPU 작업 · 곧 시작 (GPU 대기열과 별도)" : `${fmtDuration(now - j.created)}째 대기 중`;
   } else {
     const label = { done: "완료", error: "실패", cancelled: "취소" }[j.status];
     const took = j.started ? ` · ${fmtDuration(j.finished - j.started)} 걸림` : "";
     state = `${label}${took} · ${fmtDuration(now - j.finished)} 전`;
   }
   const parts = [
-    el("div", { class: "qpos" }, j.status === "running" ? "▶" : j.status === "queued" ? String(j.position) : "✓"),
+    el("div", { class: "qpos" }, j.status === "running" ? "▶" : j.status === "queued" ? (cpu ? "·" : String(j.position)) : "✓"),
     el("div", { class: "qname" }, el("span", { title: j.name }, j.name || "(만료된 영상)"), isMine ? el("span", { class: "mine-tag" }, "내 작업") : null),
     el("div", { class: "qmeta" }, state),
   ];

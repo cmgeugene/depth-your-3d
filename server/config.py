@@ -19,6 +19,10 @@ MAX_UPLOAD_MB = int(os.environ.get("DS_MAX_UPLOAD_MB", "4096"))
 BATCH_SIZE = int(os.environ.get("DS_BATCH", "8"))
 DEFAULT_MODEL = os.environ.get("DS_DEFAULT_MODEL", "large")
 
+# Jobs without depth output (stepped video from the editor) skip the GPU queue and run
+# on this many CPU workers alongside it.
+CPU_WORKERS = int(os.environ.get("DS_CPU_WORKERS", "2"))
+
 # The timing editor preloads one JPEG per frame, so very long clips are refused.
 MAX_EDITOR_FRAMES = int(os.environ.get("DS_MAX_EDITOR_FRAMES", "3000"))
 PREVIEW_WIDTH = int(os.environ.get("DS_PREVIEW_WIDTH", "480"))
