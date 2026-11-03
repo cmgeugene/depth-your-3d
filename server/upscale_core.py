@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from functools import lru_cache
 from dataclasses import asdict, dataclass
 from fractions import Fraction
@@ -48,6 +49,7 @@ def _default_user_data_dir() -> Path:
 USER_DATA_DIR = _default_user_data_dir()
 TOOLS_DIR = USER_DATA_DIR / "tools"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".mts"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "mov_text", "text", "webvtt"}
 
 
@@ -85,6 +87,29 @@ class VideoInfo:
     video_codec: str
     audio_streams: int
     subtitle_streams: list[dict]
+
+
+@dataclass(frozen=True)
+class ImageUpscaleSettings:
+    input_path: str
+    output_path: str
+    scale: int = 2
+    content_mode: str = "real"
+    denoise: str = "none"
+    backend: str = "ai"
+    output_format: str = "png"
+    quality: int = 92
+    overwrite: bool = False
+    tile_size: int = 0
+
+
+@dataclass
+class ImageInfo:
+    width: int
+    height: int
+    codec: str
+    pixel_format: str
+    has_alpha: bool
 
 
 def find_program(name: str, extra_roots: Iterable[Path] = ()) -> str:
@@ -240,6 +265,47 @@ def probe_video(path: str, ffprobe: str | None = None) -> VideoInfo:
         video_codec=str(video.get("codec_name") or "unknown"),
         audio_streams=sum(stream.get("codec_type") == "audio" for stream in streams),
         subtitle_streams=subtitles,
+    )
+
+
+def probe_image(path: str, ffprobe: str | None = None) -> ImageInfo:
+    ffprobe = ffprobe or find_ffprobe()
+    if not ffprobe:
+        raise PipelineError("ffprobe를 찾지 못했습니다. FFmpeg를 먼저 설치해 주세요.")
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,width,height,pix_fmt",
+            "-of",
+            "json",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if result.returncode != 0:
+        raise PipelineError(f"이미지 정보를 읽지 못했습니다.\n{result.stderr.strip()}")
+    streams = json.loads(result.stdout).get("streams", [])
+    if not streams:
+        raise PipelineError("이미지 스트림을 찾지 못했습니다.")
+    stream = streams[0]
+    pixel_format = str(stream.get("pix_fmt") or "unknown")
+    alpha_formats = {"rgba", "bgra", "argb", "abgr", "gbrap", "gbrap10le", "gbrap12le", "gbrap16le"}
+    has_alpha = pixel_format in alpha_formats or pixel_format.startswith("yuva")
+    return ImageInfo(
+        width=int(stream.get("width") or 0),
+        height=int(stream.get("height") or 0),
+        codec=str(stream.get("codec_name") or "unknown"),
+        pixel_format=pixel_format,
+        has_alpha=has_alpha,
     )
 
 
@@ -705,6 +771,317 @@ class VideoUpscalePipeline:
             raise PipelineError("최종 영상 파일이 생성되지 않았습니다.")
         self.log(f"완료: {output}")
         return output
+
+
+class ImageUpscalePipeline:
+    """Single-image and batch-folder upscaling pipeline."""
+
+    def __init__(
+        self,
+        settings: ImageUpscaleSettings,
+        log: Callable[[str], None] | None = None,
+        progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.settings = settings
+        self.log = log or (lambda _message: None)
+        self.progress = progress or (lambda _value, _message: None)
+        self.cancel_event = cancel_event or threading.Event()
+        self.current_process: subprocess.Popen[str] | None = None
+        self.ffmpeg = find_ffmpeg()
+        self.ffprobe = find_ffprobe()
+        self.realesrgan = find_realesrgan()
+        self.work_root = USER_DATA_DIR / "image_work" / uuid.uuid4().hex
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+            except OSError:
+                pass
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise PipelineCancelled("사용자가 이미지 작업을 중지했습니다.")
+
+    def _run_process(self, command: list[str], cwd: Path | None = None) -> None:
+        self._check_cancelled()
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        self.current_process = subprocess.Popen(
+            command,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            startupinfo=startupinfo,
+        )
+        recent: list[str] = []
+        assert self.current_process.stdout is not None
+        for raw_line in self.current_process.stdout:
+            line = raw_line.strip()
+            if line:
+                recent.append(line)
+                recent = recent[-20:]
+            if self.cancel_event.is_set():
+                self.cancel()
+                break
+        return_code = self.current_process.wait()
+        self.current_process = None
+        self._check_cancelled()
+        if return_code != 0:
+            raise PipelineError(
+                f"이미지 처리 프로그램 실행이 실패했습니다 (코드 {return_code}).\n" + "\n".join(recent[-20:])
+            )
+
+    def _collect_inputs(self) -> list[Path]:
+        source = Path(self.settings.input_path)
+        if source.is_file():
+            return [source]
+        if source.is_dir():
+            return sorted(
+                path
+                for path in source.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in IMAGE_EXTENSIONS
+                and "_upscaled_" not in path.stem.lower()
+            )
+        return []
+
+    def validate(self) -> list[Path]:
+        inputs = self._collect_inputs()
+        if not inputs:
+            raise PipelineError("처리할 이미지 파일을 찾지 못했습니다.")
+        if self.settings.scale not in {2, 4}:
+            raise PipelineError("확대 배율은 2배 또는 4배여야 합니다.")
+        if self.settings.content_mode not in {"real", "anime"}:
+            raise PipelineError("지원하지 않는 이미지 종류입니다.")
+        if self.settings.output_format not in {"png", "jpg", "webp"}:
+            raise PipelineError("출력 형식은 PNG, JPG 또는 WebP여야 합니다.")
+        if not self.ffmpeg or not self.ffprobe:
+            raise PipelineError("FFmpeg/ffprobe를 찾지 못했습니다.")
+        if self.settings.backend == "ai" and not self.realesrgan:
+            raise PipelineError("Real-ESRGAN AI 엔진이 없습니다. 먼저 'AI 엔진 설치'를 실행해 주세요.")
+        output = Path(self.settings.output_path)
+        if len(inputs) == 1 and Path(self.settings.input_path).is_file():
+            if inputs[0].resolve() == output.resolve():
+                raise PipelineError("입력 이미지와 출력 이미지는 같을 수 없습니다.")
+            output.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            output.mkdir(parents=True, exist_ok=True)
+        return inputs
+
+    def _targets(self, inputs: list[Path]) -> list[Path]:
+        source = Path(self.settings.input_path)
+        if source.is_file():
+            return [Path(self.settings.output_path)]
+        output_dir = Path(self.settings.output_path)
+        seen: dict[str, int] = {}
+        targets: list[Path] = []
+        suffix = ".jpg" if self.settings.output_format == "jpg" else f".{self.settings.output_format}"
+        for image in inputs:
+            key = image.stem.lower()
+            seen[key] = seen.get(key, 0) + 1
+            stem = image.stem if seen[key] == 1 else f"{image.stem}_{image.suffix.lstrip('.').lower()}"
+            targets.append(output_dir / f"{stem}_upscaled_{self.settings.scale}x{suffix}")
+        return targets
+
+    @staticmethod
+    def _denoise_filter(level: str) -> str:
+        return {
+            "none": "",
+            "low": "hqdn3d=1.5:1.5:6:6",
+            "medium": "hqdn3d=3:3:8:8",
+            "high": "hqdn3d=4.5:4.5:10:10",
+        }.get(level, "")
+
+    def _normalize(self, source: Path, target: Path, info: ImageInfo) -> None:
+        filters: list[str] = []
+        denoise = self._denoise_filter(self.settings.denoise)
+        if info.has_alpha:
+            filters.append("format=rgba")
+            if denoise:
+                self.log(f"알파 보존: {source.name}의 노이즈 제거를 생략합니다.")
+        elif denoise:
+            filters.append(denoise)
+        command = [self.ffmpeg, "-hide_banner", "-y", "-i", str(source), "-frames:v", "1"]
+        if filters:
+            command.extend(["-vf", ",".join(filters)])
+        command.extend(["-c:v", "png", str(target)])
+        self._run_process(command)
+
+    def _model_name(self) -> str:
+        return "realesr-animevideov3" if self.settings.content_mode == "anime" else "realesrgan-x4plus"
+
+    def _upscale(self, normalized: Path, stage: Path) -> Path:
+        result = stage / "upscaled.png"
+        if self.settings.backend == "lanczos":
+            self._run_process(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-y",
+                    "-i",
+                    str(normalized),
+                    "-vf",
+                    f"scale=iw*{self.settings.scale}:ih*{self.settings.scale}:flags=lanczos",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "png",
+                    str(result),
+                ]
+            )
+            return result
+
+        assert self.realesrgan
+        safe_real_2x = self.settings.content_mode == "real" and self.settings.scale == 2
+        ai_result = stage / "ai_native.png"
+        ai_scale = 4 if safe_real_2x else self.settings.scale
+        command = [
+            self.realesrgan,
+            "-i",
+            str(normalized),
+            "-o",
+            str(ai_result),
+            "-n",
+            self._model_name(),
+            "-s",
+            str(ai_scale),
+            "-g",
+            "0",
+            "-j",
+            "1:2:2",
+            "-f",
+            "png",
+        ]
+        if self.settings.tile_size > 0:
+            command.extend(["-t", str(self.settings.tile_size)])
+        self._run_process(command, cwd=Path(self.realesrgan).parent)
+        if safe_real_2x:
+            self._run_process(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-y",
+                    "-i",
+                    str(ai_result),
+                    "-vf",
+                    "scale=iw/2:ih/2:flags=lanczos",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "png",
+                    str(result),
+                ]
+            )
+        else:
+            shutil.copy2(ai_result, result)
+        return result
+
+    def _write_output(self, source: Path, target: Path, info: ImageInfo) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        quality = max(1, min(100, int(self.settings.quality)))
+        if self.settings.output_format == "png":
+            shutil.copy2(source, target)
+            return
+        if self.settings.output_format == "webp":
+            self._run_process(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "libwebp",
+                    "-quality",
+                    str(quality),
+                    "-compression_level",
+                    "6",
+                    str(target),
+                ]
+            )
+            return
+
+        jpeg_q = max(2, min(31, round(2 + (100 - quality) * 0.29)))
+        if info.has_alpha:
+            width = info.width * self.settings.scale
+            height = info.height * self.settings.scale
+            command = [
+                self.ffmpeg,
+                "-hide_banner",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=white:s={width}x{height}",
+                "-i",
+                str(source),
+                "-filter_complex",
+                "[0:v][1:v]overlay=shortest=1,format=yuvj420p",
+                "-frames:v",
+                "1",
+                "-q:v",
+                str(jpeg_q),
+                str(target),
+            ]
+        else:
+            command = [
+                self.ffmpeg,
+                "-hide_banner",
+                "-y",
+                "-i",
+                str(source),
+                "-frames:v",
+                "1",
+                "-q:v",
+                str(jpeg_q),
+                str(target),
+            ]
+        self._run_process(command)
+
+    def run(self) -> list[Path]:
+        inputs = self.validate()
+        targets = self._targets(inputs)
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        completed: list[Path] = []
+        skipped = 0
+        try:
+            for index, (source, target) in enumerate(zip(inputs, targets), start=1):
+                self._check_cancelled()
+                if target.exists() and not self.settings.overwrite:
+                    skipped += 1
+                    self.log(f"건너뜀 (이미 존재): {target.name}")
+                    self.progress(index / len(inputs), f"이미지 {index}/{len(inputs)}")
+                    continue
+                stage = self.work_root / f"{index:06d}"
+                stage.mkdir(parents=True, exist_ok=True)
+                info = probe_image(str(source), self.ffprobe)
+                self.log(
+                    f"{index}/{len(inputs)} {source.name}: {info.width}x{info.height} → "
+                    f"{info.width * self.settings.scale}x{info.height * self.settings.scale}"
+                )
+                normalized = stage / "input.png"
+                self._normalize(source, normalized, info)
+                upscaled = self._upscale(normalized, stage)
+                self._write_output(upscaled, target, info)
+                if not target.is_file() or target.stat().st_size == 0:
+                    raise PipelineError(f"결과 이미지가 생성되지 않았습니다: {target}")
+                completed.append(target)
+                self.progress(index / len(inputs), f"이미지 {index}/{len(inputs)}")
+                shutil.rmtree(stage, ignore_errors=True)
+            self.log(f"이미지 처리 완료: 생성 {len(completed):,}개, 건너뜀 {skipped:,}개")
+            return completed
+        finally:
+            shutil.rmtree(self.work_root, ignore_errors=True)
 
 
 def engine_status() -> dict[str, str]:

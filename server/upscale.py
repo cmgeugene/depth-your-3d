@@ -1,10 +1,14 @@
-"""Upscale jobs: runs the upscale pipeline (upscale_core) inside the shared GPU queue.
+"""Upscale jobs: runs the upscale pipelines (upscale_core) inside the shared GPU queue.
 
-The pipeline's frame caches live in the job directory and are removed when the job ends,
-so a cancelled or failed job leaves nothing behind for long (the TTL cleaner catches the rest).
+A job is either one video or a batch of images. The pipelines' caches live in the job directory and
+are removed when the job ends, so a cancelled or failed job leaves nothing behind for long (the TTL
+cleaner catches the rest). A batch of images comes back as one zip.
 """
+import os
 import shutil
 import subprocess
+import zipfile
+from pathlib import Path
 
 from . import config
 from . import upscale_core as core
@@ -24,6 +28,9 @@ FORMATS = {
     "mkv_h265": ("h265", ".mkv", "MKV H.265"),
 }
 MODE_LABEL = {"anime": "애니메이션", "real": "실사"}
+# image output key -> label
+IMAGE_FORMATS = {"png": "PNG", "jpg": "JPG", "webp": "WebP"}
+MAX_IMAGES = 200  # images per job
 
 
 def engines() -> dict:
@@ -37,6 +44,17 @@ def model_name(p: dict) -> str:
 
 
 def summary(media, p: dict) -> dict:
+    if p.get("image"):
+        n = len(p["images"])
+        size = f"{media.width}×{media.height} → {media.width * p['scale']}×{media.height * p['scale']}"
+        return {
+            "resolution": size + (" 외" if n > 1 else ""),
+            "frames": n,
+            "drawings": n,
+            "images": n,
+            "model": model_name(p),
+            "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]], IMAGE_FORMATS[p["image_format"]]],
+        }
     fps = media.fps * (2 if p["interpolation"] else 1)
     return {
         "resolution": f"{media.width}×{media.height} → {media.width * p['scale']}×{media.height * p['scale']}",
@@ -60,8 +78,73 @@ class _JobPipeline(core.VideoUpscalePipeline):
         return self._work_dir
 
 
+class _ImageJobPipeline(core.ImageUpscalePipeline):
+    """Keeps the per-image work files in the job directory."""
+
+    def __init__(self, settings, work_dir, **kwargs):
+        super().__init__(settings, **kwargs)
+        self.work_root = work_dir
+
+
+def _run_images(job, p, progress) -> list[dict]:
+    """Links the sources into one input folder under their upload names and runs the core's batch mode."""
+    from .jobs import safe_stem
+
+    inp, out, work = job.dir / "in", job.dir / "out", job.dir / "work"
+    inp.mkdir()
+    used = set()
+    for i, im in enumerate(p["images"], start=1):
+        # The core skips inputs whose name contains "_upscaled_" (its own earlier output); keep them in.
+        stem = safe_stem(im["name"]).replace("_upscaled_", "_upscaled-")
+        name = stem + Path(im["src"]).suffix.lower()
+        if name.lower() in used:
+            name = f"{stem}_{i}{Path(im['src']).suffix.lower()}"
+        used.add(name.lower())
+        try:
+            os.link(im["src"], inp / name)
+        except OSError:
+            shutil.copy2(im["src"], inp / name)
+    single = len(p["images"]) == 1
+    ext = ".jpg" if p["image_format"] == "jpg" else f".{p['image_format']}"
+    target = job.dir / f"{Path(name).stem}_upscaled_{p['scale']}x{ext}" if single else out
+    settings = core.ImageUpscaleSettings(
+        input_path=str(inp / name) if single else str(inp),
+        output_path=str(target),
+        scale=p["scale"],
+        content_mode=p["mode"],
+        denoise=p["denoise"],
+        backend=p["backend"],
+        output_format=p["image_format"],
+        quality=p["image_quality"],
+        overwrite=True,
+    )
+    label = IMAGE_FORMATS[p["image_format"]]
+    try:
+        with open(job.dir / "upscale.log", "a", encoding="utf-8") as log:
+            pipe = _ImageJobPipeline(settings, work, log=lambda m: log.write(m + "\n"), progress=progress,
+                                     cancel_event=job.cancel)
+            try:
+                done = pipe.run()
+            except core.PipelineCancelled:
+                raise Cancelled()
+        if single:
+            return [{"name": target.name, "label": f"업스케일 이미지 ({label})", "size": target.stat().st_size}]
+        progress(0.99, "zip 묶는 중")
+        zname = f"upscaled_{len(done)}images_{p['scale']}x.zip"
+        with zipfile.ZipFile(job.dir / zname, "w", zipfile.ZIP_STORED) as z:  # images are compressed already
+            for f in done:
+                z.write(f, f.name)
+        return [{"name": zname, "label": f"업스케일 이미지 {len(done)}장 ({label}, zip)",
+                 "size": (job.dir / zname).stat().st_size}]
+    finally:
+        for d in (inp, out, work):
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def run(job, media, progress) -> list[dict]:
     p = job.params["upscale"]
+    if p.get("image"):
+        return _run_images(job, p, progress)
     codec, ext, label = FORMATS[p["format"]]
     name = f"{media.stem}_upscaled_{p['scale']}x{ext}"
     out = job.dir / name

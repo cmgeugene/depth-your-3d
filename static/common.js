@@ -1,4 +1,4 @@
-// Shared helpers for the landing page, the converter and upscale pages, and the timing editor.
+// Shared helpers for the landing page, the converter, upscale and cleanup pages, and the timing editor.
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -110,30 +110,34 @@ export async function waitMedia(id) {
   for (;;) {
     const m = await api(`/api/media/${id}`);
     if (m.status !== "preparing") {
-      if (m.status === "error") throw new Error(m.error || "영상 분석에 실패했습니다.");
+      if (m.status === "error") throw new Error(m.error || "파일 분석에 실패했습니다.");
       return m;
     }
     await sleep(700);
   }
 }
 
-// Drop zone + file picker. Calls onFile(File).
-export function makeDropzone(zone, onFile) {
-  const input = el("input", { type: "file", accept: "video/*,.mp4,.mov,.mkv,.avi,.webm", hidden: true });
+// Drop zone + file picker. Calls onFile(File), or onFile([File, ...]) when `multiple`.
+export function makeDropzone(zone, onFile, accept = "video/*,.mp4,.mov,.mkv,.avi,.webm", multiple = false) {
+  const input = el("input", { type: "file", accept, hidden: true, multiple });
+  const pick = (files) => {
+    if (!files.length) return;
+    onFile(multiple ? [...files] : files[0]);
+  };
   zone.append(input);
   zone.addEventListener("click", () => input.click());
-  input.addEventListener("change", () => input.files[0] && onFile(input.files[0]));
+  input.addEventListener("change", () => { pick(input.files); input.value = ""; });
   zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag"); });
   zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
   zone.addEventListener("drop", (e) => {
     e.preventDefault();
     zone.classList.remove("drag");
-    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+    pick(e.dataTransfer.files);
   });
 }
 
 // Upload a file and wait for the server-side analysis, rendering progress into `box`.
-export async function uploadAndPrepare(file, box) {
+export async function uploadAndPrepare(file, box, preparing = "영상 분석 중 (프레임 수, 컷 감지, 미리보기 생성)…") {
   box.replaceChildren(
     el("div", { class: "row" }, el("span", {}, file.name), el("span", { class: "muted" }, fmtBytes(file.size))),
     el("div", { class: "progress" }, el("div")),
@@ -146,7 +150,7 @@ export async function uploadAndPrepare(file, box) {
     note.textContent = `업로드 중… ${(p * 100).toFixed(0)}%`;
   });
   box.querySelector(".progress").classList.add("indeterminate");
-  note.textContent = "영상 분석 중 (프레임 수, 컷 감지, 미리보기 생성)…";
+  note.textContent = preparing;
   return waitMedia(media.id);
 }
 
@@ -244,7 +248,7 @@ export function recentJobs(add) {
 }
 
 // Renders a self-updating card for a job. Returns the element.
-// kind: show only jobs of this kind ("depth" | "upscale"); actions(j): extra controls for a finished job.
+// kind: show only jobs of this kind ("depth" | "upscale" | "cleanup"); actions(j): extra controls for a finished job.
 export function jobCard(jobId, { onGone, kind, actions } = {}) {
   const card = el("div", { class: "job" });
   let stopped = false;
@@ -311,15 +315,17 @@ export function jobCard(jobId, { onGone, kind, actions } = {}) {
 
 function kindTag(j) {
   if (j.kind === "upscale") return el("span", { class: "badge tag-up" }, "업스케일");
+  if (j.kind === "cleanup") return el("span", { class: "badge tag-clean" }, "얼룩 정리");
   if (j.lane === "cpu") return el("span", { class: "badge tag-edit" }, "편집기");
-  return el("span", { class: "badge tag-depth" }, "Depth");
+  return el("span", { class: "badge tag-depth" }, "모션 트랜스퍼");
 }
 
 function queueRow(j, now, mine) {
   const isMine = mine.has(j.tag);
   const work = [
     j.resolution,
-    j.drawings !== j.frames ? `${j.frames}프레임 (그림 ${j.drawings})` : `${j.frames}프레임`,
+    j.kind === "cleanup" ? null : j.images ? `이미지 ${j.images}장`
+      : j.drawings !== j.frames ? `${j.frames}프레임 (그림 ${j.drawings})` : `${j.frames}프레임`,
     j.model,
     j.outputs.join(" + "),
   ].filter(Boolean).join(" · ");
@@ -336,7 +342,7 @@ function queueRow(j, now, mine) {
   }
   const parts = [
     el("div", { class: "qpos" }, j.status === "running" ? "▶" : j.status === "queued" ? (cpu ? "·" : String(j.position)) : "✓"),
-    el("div", { class: "qname" }, kindTag(j), el("span", { title: j.name }, j.name || "(만료된 영상)"),
+    el("div", { class: "qname" }, kindTag(j), el("span", { title: j.name }, j.name || "(만료된 파일)"),
       isMine ? el("span", { class: "mine-tag" }, "내 작업") : null),
     el("div", { class: "qmeta" }, state),
   ];

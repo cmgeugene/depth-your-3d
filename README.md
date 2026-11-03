@@ -3,9 +3,11 @@
 사내 공용 GPU 서버(RTX 4090 24GB 기준)에서 돌리는 영상 처리 웹 서비스. 접속하면 첫 화면(`/`)에서 도구를 고릅니다.
 
 - **업스케일** (`/upscale`): 2D 애니메이션 영상을 Real-ESRGAN(animevideov3) 또는 Lanczos로 2배·4배 확대, 선택적으로 RIFE 프레임 보간(FPS 2배). 오디오·자막·메타데이터 보존. 결과를 바로 프레임 편집기로 보낼 수 있습니다.
-- **Depth 변환** (`/depth`): 실사 영상 업로드 → Depth Anything V2로 흑백 depth 영상(mp4) / 16bit PNG 시퀀스(zip) 생성 → 다운로드
+  - **이미지도 됩니다**: png · jpg · webp · bmp · tif를 한 장 또는 여러 장(최대 200장) 한 번에 올리면 같은 설정으로 확대합니다. 출력은 PNG/JPG/WebP 중 선택하고, 여러 장이면 zip 하나로 받습니다. 투명도는 유지되며(JPG는 흰 배경), 투명도가 있는 이미지는 노이즈 제거를 건너뜁니다.
+- **모션 트랜스퍼 영상 변환** (`/depth`, 예전 이름 Depth 변환): 실사 영상 업로드 → Depth Anything V2로 흑백 depth 영상(mp4) / 16bit PNG 시퀀스(zip) 생성 → 다운로드
+- **얼룩 정리** (`/cleanup`): GPT Image로 만든 2D 이미지의 자글자글한 얼룩·픽셀 노이즈를 FLUX.1 [dev] img2img(denoise 0.15~0.2)로 약하게 다시 그려 정리합니다. 브러시로 정리할 곳만 칠하거나, 지킬 곳(얼굴 등)을 칠한 뒤 반전할 수 있습니다. 마스크 밖 픽셀은 원본 그대로 유지됩니다.
 - **프레임 편집기 (Beta)** (`/editor`): 실사처럼 너무 부드럽게 움직이는 부분을 1s/1.5s/2s… 애니메이션 타이밍으로 다시 잡아 스텝 영상(mp4)으로 렌더. Depth는 쓰지 않습니다.
-- 업스케일과 Depth 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 각 페이지의 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
+- 업스케일, 모션 트랜스퍼, 얼룩 정리 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 각 페이지의 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
 - mp4 결과물에 원본 오디오를 넣을지 선택할 수 있습니다.
 
 ## 실행
@@ -18,7 +20,7 @@ run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
 ./run.sh       # Linux, 내부망 공유
 ```
 
-첫 실행 때 `.venv`를 만들고 torch(CUDA 12.8)와 의존성을 설치합니다. 이후에는 `requirements.txt`가 바뀌었을 때만 다시 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (Large 약 1.3GB).
+첫 실행 때 `.venv`를 만들고 torch 2.11(CUDA 12.8, 얼룩 정리의 Nunchaku가 지원하는 버전으로 고정)과 의존성을 설치합니다. 이후에는 `requirements.txt`가 바뀌었을 때만 다시 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (Large 약 1.3GB).
 서버가 뜨면 창에 접속 주소가 나옵니다 (`같은 네트워크의 다른 PC: http://192.168.x.x:8000`). 이 주소를 공유하면 됩니다.
 다른 PC에서 안 열리면 방화벽에서 포트를 열어야 합니다. 필요한 명령도 같은 창에 나옵니다 (관리자 권한으로 한 번만 실행).
 
@@ -33,7 +35,31 @@ setup-upscale-engines.bat    # Real-ESRGAN, RIFE를 공식 GitHub 릴리스에�
 엔진이 없어도 서버는 뜨고 Lanczos 업스케일은 쓸 수 있습니다. 빠진 엔진은 업스케일 페이지에 안내가 나옵니다. 엔진은 Windows용(ncnn-vulkan, Vulkan 지원 GPU 필요)이라 업스케일 AI 모드는 현재 Windows 서버에서만 동작합니다.
 서버 폴더 경로에 한글 등 비 ASCII 문자가 있으면 엔진이 모델 파일을 못 여는 경우가 있으니, 그럴 땐 `DS_UPSCALE_ENGINES`로 영문 경로를 지정하세요.
 
-업스케일 처리 코드(`server/upscale_core.py`)는 데스크톱 앱 anc_video-upscale-tool에서 옮겨 온 것입니다. 그 저장소는 보관용으로만 남기므로, 업스케일 처리는 이 파일에서 고칩니다. 서버에 맞춘 부분(작업 폴더 캐시, 오디오 제거 등)은 `server/upscale.py`에 둡니다.
+업스케일 처리 코드(`server/upscale_core.py`)는 데스크톱 앱 anc_video-upscale-tool에서 옮겨 온 것입니다. 이미지 업스케일(`ImageUpscalePipeline`)은 그 저장소의 커밋 `36dcc04`(Add image upscaling and batch processing)에서 가져왔습니다. 그 저장소는 보관용으로만 남기므로, 업스케일 처리는 이 파일에서 고칩니다. 서버에 맞춘 부분(작업 폴더 캐시, 오디오 제거 등)은 `server/upscale.py`에 둡니다.
+
+### 얼룩 정리 설치 (서버에서 한 번)
+
+FLUX.1 [dev]는 Hugging Face에서 라이선스 동의가 필요한 모델입니다. 먼저:
+
+1. https://huggingface.co/black-forest-labs/FLUX.1-dev 에서 로그인 후 라이선스 동의
+2. https://huggingface.co/settings/tokens 에서 Read 토큰 생성
+3. `.venv\Scripts\hf auth login` 실행 후 토큰 붙여넣기
+
+```
+setup-flux.bat    # Nunchaku(INT4 Flux 실행 엔진)를 torch 버전에 맞춰 설치하고 모델을 받습니다 (약 17GB)
+```
+
+- Flux 본체는 Nunchaku SVDQuant INT4(약 7GB VRAM)라 24GB 카드에서 SAM 같은 다른 프로세스와 함께 돌릴 수 있습니다. 16GB 미만 GPU에서는 자동으로 offload 모드(시스템 RAM에서 스트리밍, 느림)로 돌아갑니다.
+- T5/CLIP 텍스트 인코더는 GPU에 상주하지 않습니다. 프롬프트마다 한 번만 인코딩해 `data/flux-prompts`에 캐시합니다 (GPU 여유가 11GB 미만이면 CPU에서 인코딩).
+- 작업이 끝날 때마다 서버 창과 작업 폴더의 `cleanup.log`에 **VRAM 피크**(이 서버 / GPU 전체)가 찍힙니다. SAM과 함께 돌릴 때 여유를 확인하는 용도입니다.
+- `DS_FLUX_IDLE_MIN`분 동안 정리 작업이 없으면 Flux를 VRAM에서 내립니다. 다음 작업은 다시 불러오느라 조금 늦게 시작합니다.
+- **도움말**: 정리 페이지에 처음 들어오면 사용법·사례·한계를 담은 도움말이 뜹니다. 이미지·마스크 카드 우상단 아이콘이나 `?` 키로 다시 열 수 있습니다. 사례 이미지는 `static/help/`에 있습니다.
+- **자동 선택** (SAM 3.1): 정리 페이지에 `hair`처럼 영어 단어를 넣고 "마스크에 추가/빼기"를 누르면, 이미지에서 그 단어에 해당하는 곳을 모두(인물마다) 찾아 마스크에 더하거나 뺍니다. 결과는 브러시·지우개로 다듬습니다.
+  - SAM 3.1은 numpy 2 미만이 필요해서 스튜디오 `.venv`와 같이 설치할 수 없습니다. SAM 3.1이 설치된 다른 Python 환경을 `DS_SAM3_PYTHON`, 체크포인트(`sam3.1_multiplex.pt`)를 `DS_SAM3_CHECKPOINT`로 지정하면 그 환경에서 별도 프로세스로 돌립니다. 지정하지 않으면 자동 선택 버튼만 꺼집니다.
+  - 첫 요청은 모델을 올리느라 1분 정도 걸리고, 그다음부터는 1초 안팎입니다. `DS_SAM3_IDLE_SEC`초 동안 요청이 없으면 프로세스를 끝내 VRAM을 돌려줍니다. 같은 이미지·같은 단어는 결과를 캐시합니다. 로그는 `data/sam3-worker.log`.
+- **톤 보정**: Flux의 VAE를 한 번 거치기만 해도 검정이 들뜨고 대비·채도가 몇 % 떨어져 뿌옇게 보입니다. 정리한 결과를 원본과 비교해 채널별 밝기·대비(gain/offset)를 자동으로 맞춥니다. 값은 작업 로그에 남습니다.
+- 기본값(20스텝, denoise 0.18, guidance 3.5, euler)은 ComfyUI 워크플로 `flux1_dev_i2i_pixel_noise_cleanup`과 같은 방식입니다. "스텝"은 실제로 도는 스텝 수입니다 (ComfyUI KSampler와 같음).
+- **라이선스**: FLUX.1 [dev] 가중치는 비상업 라이선스입니다. 결과물은 상업적으로 써도 되지만, 서버를 상업 서비스로 운영하려면 BFL 라이선스가 필요합니다.
 
 ## 설정 (환경 변수)
 
@@ -51,6 +77,12 @@ setup-upscale-engines.bat    # Real-ESRGAN, RIFE를 공식 GitHub 릴리스에�
 | `DS_CUT_THRESHOLD` / `DS_CUT_MIN_SHOT` | `12` / `6` | 컷 자동 감지 민감도 / 최소 샷 길이 |
 | `DS_UPSCALE_ENGINES` | `./engines` | 업스케일 엔진(Real-ESRGAN, RIFE) 설치 위치 (영문 경로) |
 | `DS_UPSCALE_MAX_SIDE` | `8192` | 업스케일 출력의 최대 긴 변(px). 넘으면 작업을 받지 않습니다 |
+| `DS_FLUX_OFFLOAD` | `auto` | 얼룩 정리 Flux를 시스템 RAM에서 스트리밍할지. `auto`는 16GB 미만 GPU에서만 켬, `on`/`off`로 강제 |
+| `DS_FLUX_IDLE_MIN` | `10` | 정리 작업이 없을 때 Flux를 VRAM에서 내리기까지의 시간(분). `0`이면 계속 올려 둠 |
+| `DS_CLEANUP_MAX_MP` | `4.2` | 얼룩 정리 최대 이미지 크기(메가픽셀, 2048×2048 ≈ 4.2) |
+| `DS_SAM3_PYTHON` / `DS_SAM3_CHECKPOINT` | (없음) | 자동 선택용 SAM 3.1 Python 실행 파일 / `sam3.1_multiplex.pt` 경로 |
+| `DS_SAM3_IDLE_SEC` | `120` | 자동 선택 요청이 없을 때 SAM 3.1 프로세스를 끝내기까지의 시간(초) |
+| `DS_FLUX_REPO` / `DS_FLUX_TRANSFORMER` | FLUX.1-dev / 자동 | 텍스트 인코더·VAE를 받을 저장소 / Nunchaku 가중치 경로 (`repo/file.safetensors`) |
 
 ## 라이선스 주의
 
@@ -78,6 +110,7 @@ setup-upscale-engines.bat    # Real-ESRGAN, RIFE를 공식 GitHub 릴리스에�
 
 ## 알려진 한계
 
+- 얼룩 정리는 latent를 다시 그리는 방식이라 마스크 안쪽은 denoise가 낮아도 작은 글자, 손가락, 얇은 선이 바뀔 수 있습니다. 시드를 바꿔 여러 장(최대 4장) 뽑아 고르세요.
 - 로그인/권한 기능이 없습니다. 사내망에서만 열어 두세요.
 - 서버를 재시작하면 진행 중이던 작업 목록이 사라집니다 (파일은 TTL까지 남음).
 - 가변 프레임레이트(VFR) 영상은 원본 평균 fps로 다시 인코딩됩니다.

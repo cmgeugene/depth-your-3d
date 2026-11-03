@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>얼룩 정리 — 휴먼에이 영상 처리 스튜디오</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page wide cleanup-page">
+    <header class="header">
+      <a class="brand" href="/">휴먼에이 영상 처리 스튜디오</a>
+      <a class="pill" id="serverStatus" href="#queue" title="서버 대기열 보기">서버 확인 중…</a>
+      <div class="spacer"></div>
+      <nav class="nav" aria-label="서비스">
+        <a class="btn icon" href="/" aria-label="홈 (서비스 선택)" title="홈"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"></path><path d="M5 10v10h5v-6h4v6h5V10"></path></svg></a>
+        <a class="btn" href="/upscale">업스케일</a>
+        <a class="btn" href="/depth">모션 트랜스퍼</a>
+        <a class="btn" href="/editor">프레임 편집기 <span class="beta">BETA</span></a>
+        <a class="btn on" href="/cleanup" aria-current="page">얼룩 정리</a>
+      </nav>
+    </header>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>1. 이미지 · 마스크</h2>
+        <button type="button" class="icon" id="helpBtn" aria-label="도움말" title="도움말 (?)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path><path d="M12 17h.01"></path></svg></button>
+      </div>
+      <div id="uploadBox">
+        <div class="dropzone" id="dropzone">
+          <strong>이미지를 끌어다 놓거나 클릭해서 선택</strong>
+          <span id="uploadHint">png · jpg · webp</span>
+        </div>
+      </div>
+      <div id="paintBox" class="stack" hidden>
+        <div class="paint-toolbar">
+          <div class="seg-ctrl" role="group" aria-label="도구">
+            <button type="button" id="toolBrush" title="브러시 (B)">브러시</button>
+            <button type="button" id="toolEraser" title="지우개 (E)">지우개</button>
+          </div>
+          <label class="inline-range" title="이미지 위에서 마우스 휠, 또는 [ / ] 키로 조절">크기 <input type="range" id="brushSize" min="4" max="400" step="1"> <span class="val mono" id="brushVal"></span></label>
+          <button type="button" id="invertBtn" title="칠한 곳과 안 칠한 곳을 뒤집습니다 (I)">마스크 반전</button>
+          <button type="button" id="undoBtn" title="되돌리기 (Ctrl+Z)">되돌리기</button>
+          <button type="button" id="clearBtn">마스크 지우기</button>
+          <div class="spacer"></div>
+          <label class="check" title="M"><input type="checkbox" id="showMask" checked> 마스크 표시</label>
+        </div>
+        <div class="paint-toolbar" id="autoRow">
+          <label class="inline-range" for="autoPrompt" title="SAM 3.1이 이미지에서 이 단어(영어)에 해당하는 곳을 모두 찾습니다">자동 선택</label>
+          <input id="autoPrompt" list="autoPrompts" value="hair" style="width:120px" autocomplete="off">
+          <datalist id="autoPrompts">
+            <option value="hair"></option><option value="face"></option><option value="eyes"></option>
+            <option value="skin"></option><option value="clothes"></option><option value="person"></option>
+          </datalist>
+          <button type="button" id="autoAdd" title="찾은 영역을 마스크에 더합니다 (Enter)">마스크에 추가</button>
+          <button type="button" id="autoSub" title="찾은 영역을 마스크에서 뺍니다">마스크에서 빼기</button>
+          <span class="note" id="autoNote"></span>
+        </div>
+        <div class="paint" id="paint">
+          <canvas id="view"></canvas>
+        </div>
+        <div class="row">
+          <span class="note" id="maskInfo"></span>
+          <div class="spacer"></div>
+          <div class="seg-ctrl" role="group" aria-label="보기" id="compareCtrl" hidden>
+            <button type="button" data-v="src" title="원본 (C로 전환)">원본</button>
+            <button type="button" data-v="out" title="결과 (C로 전환)">결과</button>
+            <button type="button" data-v="split" title="왼쪽 원본, 오른쪽 결과. 이미지 위를 끌어서 경계 이동 (C로 전환)">스플릿</button>
+          </div>
+          <button id="otherBtn">다른 이미지</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="optionsCard" hidden>
+      <h2>2. 정리 설정</h2>
+      <div class="stack">
+        <div class="note warn" id="engineWarn" hidden></div>
+        <div class="opts-grid">
+          <div class="field-v">
+            <label for="denoise">정리 강도</label>
+            <div class="inline"><input type="range" id="denoise" step="0.01"><span class="val" id="denoiseVal"></span></div>
+            <div class="note">denoise. 선·형태가 바뀌면 0.12~0.18로 낮추고, 얼룩이 남으면 0.23~0.28까지만 천천히 올리세요.</div>
+          </div>
+          <div class="field-v">
+            <label for="feather">경계 부드럽게</label>
+            <div class="inline"><input type="range" id="feather" step="1"><span class="val" id="featherVal"></span></div>
+            <div class="note">마스크 경계를 이만큼 섞어 이음새를 숨깁니다.</div>
+          </div>
+          <div class="field-v">
+            <label id="lblCount">결과 개수</label>
+            <div class="seg-ctrl" role="group" aria-labelledby="lblCount" data-key="count">
+              <button type="button" data-v="1">1장</button>
+              <button type="button" data-v="2">2장</button>
+              <button type="button" data-v="3">3장</button>
+              <button type="button" data-v="4">4장</button>
+            </div>
+            <div class="note">시드만 바꿔 여러 장 뽑아 고릅니다.</div>
+          </div>
+          <div class="field-v">
+            <label for="seed">시드</label>
+            <input type="number" id="seed" min="0" placeholder="무작위" style="width:140px">
+            <div class="note">비우면 무작위. 여러 장이면 시드 +1씩.</div>
+          </div>
+        </div>
+        <details class="adv">
+          <summary>고급 설정</summary>
+          <div class="opts-grid">
+            <div class="field-v">
+              <label for="steps">스텝</label>
+              <div class="inline"><input type="range" id="steps" step="1"><span class="val" id="stepsVal"></span></div>
+            </div>
+            <div class="field-v">
+              <label for="guidance">Guidance</label>
+              <div class="inline"><input type="range" id="guidance" step="0.1"><span class="val" id="guidanceVal"></span></div>
+            </div>
+            <div class="field-v wide2">
+              <label for="prompt">프롬프트</label>
+              <textarea id="prompt" rows="4"></textarea>
+              <div class="row"><span class="note">원본의 화풍·피사체를 한 문장 덧붙이면 보존력이 좋아질 수 있습니다.</span><div class="spacer"></div><button type="button" id="promptReset">기본값</button></div>
+            </div>
+          </div>
+        </details>
+        <div class="row">
+          <button class="primary" id="startBtn">정리 시작</button>
+          <div class="stack" style="gap:2px">
+            <span class="note" id="outInfo"></span>
+            <span class="note warn" id="outWarn" hidden></span>
+          </div>
+          <span class="note" id="startNote"></span>
+        </div>
+        <p class="note">FLUX.1 [dev] 가중치는 비상업 라이선스입니다. 생성 결과물은 상업적으로 쓸 수 있지만, 이 서버를 상업 서비스로 운영하려면 BFL 라이선스가 필요합니다.</p>
+      </div>
+    </section>
+
+    <div class="grid-2">
+      <section class="card">
+        <h2>3. 내 작업</h2>
+        <div class="jobs" id="jobs"></div>
+        <p class="note" id="jobsEmpty">아직 작업이 없습니다. 결과 파일은 서버에 <span id="ttl">24</span>시간 보관됩니다.</p>
+      </section>
+
+      <section class="card" id="queue">
+        <h2>서버 대기열 <span class="note" id="queueSummary"></span></h2>
+        <div class="queue" id="queueList"></div>
+        <p class="note">업스케일, 모션 트랜스퍼, 얼룩 정리 작업은 GPU 하나에서 위에서부터 순서대로 처리됩니다. <span class="mine-tag">내 작업</span> 표시는 이 브라우저에서 넣은 작업입니다.</p>
+      </section>
+    </div>
+  </div>
+  <div class="modal" id="helpModal" hidden>
+    <div class="modal-box help-box" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <div class="help-head">
+        <h2 id="helpTitle">얼룩 정리 도움말</h2>
+        <button type="button" class="icon" id="helpClose" aria-label="닫기" title="닫기 (Esc)">✕</button>
+      </div>
+      <p class="help-lead">GPT 이미지 특유의 <b>얼룩·블록 무늬 노이즈</b>를 지우는 도구입니다.<br>
+        칠한 곳만 아주 약하게 다시 그리고, 나머지는 원본 그대로 유지합니다.</p>
+
+      <div class="seg-ctrl help-tabs" role="tablist">
+        <button type="button" role="tab" data-tab="cases" class="on">사례</button>
+        <button type="button" role="tab" data-tab="howto">사용 방법</button>
+        <button type="button" role="tab" data-tab="limits">한계</button>
+      </div>
+
+      <div class="help-pane" data-pane="cases">
+        <p class="note">가운데 선을 좌우로 끌어서 비교할 수 있습니다.</p>
+        <div class="case">
+          <h3>머리카락 · 얼굴</h3>
+          <p>머리카락과 얼굴 피부에 낀 얼룩덜룩한 질감 → 깔끔한 결과 매끈한 면 <span class="muted">(원본 크기)</span></p>
+          <div class="ba" style="--pos:50%">
+              <img src="/static/help/hair_after.jpg" alt="정리 후">
+              <img class="ba-before" src="/static/help/hair_before.jpg" alt="원본">
+              <span class="ba-tag left">원본</span><span class="ba-tag right">정리 후</span>
+              <div class="ba-line"></div>
+              <input class="ba-range" type="range" min="0" max="100" value="50" aria-label="원본과 정리 후 비교">
+            </div>
+        </div>
+        <div class="case">
+          <h3>배경</h3>
+          <p>담장 블록에 낀 얼룩덜룩한 무늬 → 깔끔한 면 <span class="muted">(원본 크기)</span></p>
+          <div class="ba" style="--pos:50%">
+              <img src="/static/help/background_after.jpg" alt="정리 후">
+              <img class="ba-before" src="/static/help/background_before.jpg" alt="원본">
+              <span class="ba-tag left">원본</span><span class="ba-tag right">정리 후</span>
+              <div class="ba-line"></div>
+              <input class="ba-range" type="range" min="0" max="100" value="50" aria-label="원본과 정리 후 비교">
+            </div>
+        </div>
+      </div>
+
+      <div class="help-pane" data-pane="howto" hidden>
+        <div class="scenario">
+          <div class="sc-head"><span class="sc-tag">A</span><b>얼굴 클로즈업(ECU)에 얼룩이 보일 때</b></div>
+          <p class="sc-why">얼굴이 크게 나오면 이목구비가 거의 바뀌지 않습니다. 마스크 없이 전체로 돌려도 됩니다.</p>
+          <ol class="sc-steps">
+            <li>마스크는 칠하지 않고 그대로 둠</li>
+            <li><b>정리 시작</b></li>
+          </ol>
+        </div>
+
+        <div class="scenario">
+          <div class="sc-head"><span class="sc-tag">B</span><b>인물이 작게 나온 컷</b></div>
+          <p class="sc-why">작은 얼굴은 다시 그려지면서 변형됩니다. 얼굴(또는 인물 전체)을 마스크로 잡고 반전해서, 그 부분을 뺀 나머지만 정리합니다.</p>
+          <ol class="sc-steps">
+            <li>자동 선택에 <code>face</code> 혹은 <code>character</code> → <b>마스크에 추가</b></li>
+            <li>잡힌 영역 중 얼룩이 있어 정리할 부분은 <b>지우개</b>(<kbd>E</kbd>)로 지움</li>
+            <li><b>마스크 반전</b>(<kbd>I</kbd>) — 잡은 부분을 뺀 전부가 분홍색이 됨</li>
+            <li><b>정리 시작</b></li>
+          </ol>
+        </div>
+
+        <div class="scenario">
+          <div class="sc-head"><span class="sc-tag">C</span><b>특정 부분만 정리하고 싶을 때</b></div>
+          <p class="sc-why">머리카락처럼 얼룩이 몰린 곳만 정리하고 나머지는 그대로 둡니다.</p>
+          <ol class="sc-steps">
+            <li>자동 선택에 <code>hair</code> 같은 단어 → <b>마스크에 추가</b> (또는 브러시로 직접 칠하기)</li>
+            <li>필요 없이 잡힌 곳(앞쪽 흐린 인물, 장신구 등)은 <b>지우개</b>로 지움</li>
+            <li><b>정리 시작</b></li>
+          </ol>
+        </div>
+
+        <p class="note sc-common">공통: 강도는 0.18부터 시작하고, 결과는 2~4장 뽑아서 고르는 것을 권장합니다. 끝나면 <b>내 작업 → 비교</b>, <kbd>C</kbd>로 원본·결과·스플릿을 바꿔 가며 확인합니다.</p>
+        <div class="key-chips">
+          <span><kbd>B</kbd> 브러시</span><span><kbd>E</kbd> 지우개</span><span><kbd>휠</kbd> 브러시 크기</span>
+          <span><kbd>I</kbd> 반전</span><span><kbd>M</kbd> 마스크 표시</span><span><kbd>C</kbd> 원본/결과/스플릿</span>
+          <span><kbd>Ctrl+Z</kbd> 되돌리기</span><span><kbd>?</kbd> 도움말</span>
+        </div>
+      </div>
+
+      <div class="help-pane" data-pane="limits" hidden>
+        <ul class="limits">
+          <li><b>칠한 곳은 다시 그려짐</b><span>작게 나온 얼굴 · 손 · 글자 · 장신구는 마스크에서 빼야 합니다.</span></li>
+          <li><b>작은 물체는 형상이 무너집니다.</b><span>유지해야 하는 물체라면 해당 부분은 마스크를 적용하세요.</span></li>
+          <li><b>결과가 매번 조금씩 다름</b><span>여러 장 뽑아서 고르는 것을 권장합니다.</span></li>
+          <li><b>항상 원본에서 시작함</b><span>여러 부위는 한 마스크에 같이 칠해야 합니다.</span></li>
+          <li><b>자동 선택은 영어 단어만</b><span>처음 한 번은 1분쯤 걸립니다.</span></li>
+        </ul>
+        <p class="note">2D 그림 기준으로 맞춘 설정입니다. 최대 4.2MP · FLUX.1 [dev] 비상업 라이선스.</p>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/static/cleanup.js"></script>
+</body>
+</html>

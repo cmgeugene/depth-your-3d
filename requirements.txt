@@ -8,3 +8,8 @@ python-multipart>=0.0.9
 numpy>=1.26
 pillow>=10.0
 opencv-python-headless>=4.8
+# Image cleanup (FLUX.1 dev). Nunchaku is not on PyPI: setup-flux.bat installs the wheel matching torch.
+diffusers>=0.35
+accelerate>=1.0
+sentencepiece>=0.2
+protobuf>=4.25

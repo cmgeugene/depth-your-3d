@@ -1,6 +1,6 @@
 """In-memory registry of uploaded media and render jobs, plus the workers that run them.
 
-Depth and upscale jobs run one at a time in submission order on the single GPU worker, so
+Depth, upscale and image cleanup jobs run one at a time in submission order on the single GPU worker, so
 everyone shares the GPU fairly. Jobs that need no GPU (stepped video from the editor) go to a
 small CPU pool instead and never wait behind GPU jobs.
 State is lost on restart; files on disk are swept by the TTL cleaner.
@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, motion, pipeline, upscale, video
+from . import cleanup, config, motion, pipeline, upscale, video
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -35,6 +35,8 @@ def safe_stem(filename: str) -> str:
 def _summary(media: "Media", params: dict) -> dict:
     if params.get("kind") == "upscale":
         return upscale.summary(media, params["upscale"])
+    if params.get("kind") == "cleanup":
+        return cleanup.summary(media, params["cleanup"])
     outs = params["outputs"]
     fmap = params.get("map")
     want_depth = outs.get("depth_mp4") or outs.get("depth_png")
@@ -70,14 +72,18 @@ class Media:
     cuts: list[int] = field(default_factory=list)
     editor: bool = False
     motion: dict | None = None  # {"camera": [...], "action": [...]} per frame, editor media only
+    kind: str = "video"  # video | image (image cleanup)
+    has_alpha: bool = False  # images only
 
     @property
     def stem(self) -> str:
         return safe_stem(self.name)
 
     def public(self) -> dict:
-        d = {"id": self.id, "name": self.name, "status": self.status, "error": self.error}
-        if self.status == "ready":
+        d = {"id": self.id, "name": self.name, "status": self.status, "error": self.error, "kind": self.kind}
+        if self.status == "ready" and self.kind == "image":
+            d.update(width=self.width, height=self.height, has_alpha=self.has_alpha)
+        elif self.status == "ready":
             d.update(
                 width=self.width, height=self.height, fps=self.fps, fps_str=self.fps_str,
                 duration=self.duration, has_audio=self.has_audio, frames=self.frames,
@@ -107,7 +113,7 @@ class Job:
 
     @property
     def kind(self) -> str:
-        return self.params.get("kind", "depth")  # depth | upscale
+        return self.params.get("kind", "depth")  # depth | upscale | cleanup
 
 
 class Registry:
@@ -134,6 +140,9 @@ class Registry:
         self.prep_pool.submit(self._prepare, media)
 
     def _prepare(self, m: Media):
+        if m.src.suffix.lower() in cleanup.IMAGE_SUFFIXES:
+            m.kind = "image"
+            return self._prepare_image(m)
         try:
             info = video.probe(m.src)
             m.width, m.height = info["width"], info["height"]
@@ -156,6 +165,18 @@ class Registry:
             traceback.print_exc()
             m.status, m.error = "error", str(exc)
 
+    def _prepare_image(self, m: Media):
+        from PIL import Image, ImageOps
+
+        try:
+            with Image.open(m.src) as img:
+                img = ImageOps.exif_transpose(img)  # same orientation the browser shows
+                m.width, m.height = img.size
+                m.has_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+            m.frames, m.status = 1, "ready"
+        except Exception as exc:
+            m.status, m.error = "error", f"이미지를 열 수 없습니다: {exc}"
+
     def get_media(self, media_id: str) -> Media | None:
         return self.media.get(media_id) if ID_RE.match(media_id or "") else None
 
@@ -174,12 +195,15 @@ class Registry:
         return media
 
     # ---- jobs ----
-    def submit(self, media: Media, params: dict) -> Job:
+    def submit(self, media: Media, params: dict, files: dict[str, bytes] | None = None) -> Job:
+        """`files` are written into the job directory before the job can start (e.g. a cleanup mask)."""
         job_id = new_id()
         job_dir = config.JOBS_DIR / job_id
         job_dir.mkdir(parents=True)
+        for name, data in (files or {}).items():
+            (job_dir / name).write_bytes(data)
         outs = params.get("outputs", {})
-        gpu = params.get("kind") == "upscale" or outs.get("depth_mp4") or outs.get("depth_png")
+        gpu = params.get("kind") in ("upscale", "cleanup") or outs.get("depth_mp4") or outs.get("depth_png")
         lane = "gpu" if gpu else "cpu"
         job = Job(id=job_id, media_id=media.id, params=params, dir=job_dir, summary=_summary(media, params), lane=lane)
         with self.lock:
@@ -264,8 +288,8 @@ class Registry:
 
         try:
             if media is None or media.status != "ready":
-                raise RuntimeError("원본 영상이 만료되었거나 준비되지 않았습니다.")
-            runner = upscale.run if job.kind == "upscale" else pipeline.run
+                raise RuntimeError("원본 파일이 만료되었거나 준비되지 않았습니다.")
+            runner = {"upscale": upscale.run, "cleanup": cleanup.run}.get(job.kind, pipeline.run)
             job.outputs = runner(job, media, progress)
             job.status, job.progress, job.stage = "done", 1.0, "완료"
         except pipeline.Cancelled:
@@ -287,7 +311,9 @@ class Registry:
         while True:
             time.sleep(600)
             cutoff = time.time() - config.TTL_HOURS * 3600
-            busy = {j.media_id for j in self.jobs.values() if j.status in ("queued", "running")}
+            active = [j for j in self.jobs.values() if j.status in ("queued", "running")]
+            # an image batch reads every image of the batch, not only the first
+            busy = {m for j in active for m in [j.media_id, *j.params.get("upscale", {}).get("media_ids", [])]}
             for base, table in ((config.MEDIA_DIR, self.media), (config.JOBS_DIR, self.jobs)):
                 for d in base.iterdir():
                     if not d.is_dir() or d.stat().st_mtime > cutoff or d.name in busy:
