@@ -17,7 +17,7 @@ MAX_UPLOAD_MB = int(os.environ.get("DS_MAX_UPLOAD_MB", "4096"))
 
 # Frames per forward pass. 8 is comfortable for Large at 518px on a 24GB card.
 BATCH_SIZE = int(os.environ.get("DS_BATCH", "8"))
-DEFAULT_MODEL = os.environ.get("DS_DEFAULT_MODEL", "large")
+DEFAULT_MODEL = os.environ.get("DS_DEFAULT_MODEL", "vda_small")
 
 # Jobs without depth output (stepped video from the editor) skip the GPU queue and run
 # on this many CPU workers alongside it.
@@ -53,6 +53,14 @@ CLEANUP_MAX_MP = float(os.environ.get("DS_CLEANUP_MAX_MP", "4.2"))  # largest im
 SAM3_PYTHON = os.environ.get("DS_SAM3_PYTHON", "")
 SAM3_CHECKPOINT = os.environ.get("DS_SAM3_CHECKPOINT", "")
 SAM3_IDLE_SEC = float(os.environ.get("DS_SAM3_IDLE_SEC", "120"))
+# Clay reference videos: SAM 3D Body in its own environment (Python 3.11 + its repository checkout).
+# Empty paths turn the tool off. The worker keeps its models loaded between jobs and exits after
+# DS_CLAY_IDLE_SEC idle seconds to give the VRAM back.
+CLAY_PYTHON = os.environ.get("DS_CLAY_PYTHON", "")
+CLAY_REPO = os.environ.get("DS_CLAY_REPO", "")
+CLAY_CHECKPOINT = os.environ.get("DS_CLAY_CHECKPOINT", "")  # empty: facebook/sam-3d-body-dinov3 (gated)
+CLAY_IDLE_SEC = float(os.environ.get("DS_CLAY_IDLE_SEC", "300"))
+CLAY_MAX_FRAMES = int(os.environ.get("DS_CLAY_MAX_FRAMES", "3000"))  # meshes of every frame are held in RAM
 
 FFMPEG = os.environ.get("DS_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("DS_FFPROBE", "ffprobe")
@@ -60,21 +68,45 @@ FFPROBE = os.environ.get("DS_FFPROBE", "ffprobe")
 MODELS = {
     "small": {
         "repo": "depth-anything/Depth-Anything-V2-Small-hf",
-        "label": "Small (25M)",
+        "label": "이미지 Small (25M)",
         "license": "Apache-2.0",
     },
     "base": {
         "repo": "depth-anything/Depth-Anything-V2-Base-hf",
-        "label": "Base (98M)",
+        "label": "이미지 Base (98M)",
         "license": "CC-BY-NC-4.0",
     },
     "large": {
         "repo": "depth-anything/Depth-Anything-V2-Large-hf",
-        "label": "Large (335M)",
+        "label": "이미지 Large (335M)",
         "license": "CC-BY-NC-4.0",
+    },
+    # Video Depth Anything: looks at neighbouring frames, so surfaces do not wobble over time.
+    # Code is vendored in server/vda (wrapper: server/video_depth.py); weights come from these repos.
+    # Small runs offline or streaming, chosen per job (DepthParams.vda_mode). Large is streaming only:
+    # offline Large can need more than the 24GB the server has. "modes" lists what a model allows.
+    "vda_small": {
+        "vda": {"repo": "depth-anything/Video-Depth-Anything-Small", "file": "video_depth_anything_vits.pth",
+                "encoder": "vits"},
+        "label": "Video Small (28M, 영상용)",
+        "license": "Apache-2.0",
+        "modes": ["offline", "stream"],
+    },
+    "vda_large": {
+        "vda": {"repo": "depth-anything/Video-Depth-Anything-Large", "file": "video_depth_anything_vitl.pth",
+                "encoder": "vitl"},
+        "label": "Video Large (382M, 영상용)",
+        "license": "CC-BY-NC-4.0",
+        "modes": ["stream"],
     },
 }
 ENABLED_MODELS = [
-    m.strip() for m in os.environ.get("DS_MODELS", "small,base,large").split(",") if m.strip() in MODELS
+    m.strip() for m in os.environ.get("DS_MODELS", "vda_small,vda_large,small,base,large").split(",")
+    if m.strip() in MODELS
 ]
+VDA_MODES = {"offline": "오프라인", "stream": "스트리밍"}
 INPUT_SIZES = [518, 644, 756, 1036]
+# Video models, offline mode: the whole clip is inferred in one pass (cuts only steer brightness
+# normalization), so a wrongly detected cut does not break the depth. Every drawing is held in RAM at
+# working size (~1.8MB at 518px for 21:9), so longer clips fall back to one pass per cut.
+VDA_ONEPASS_MAX_FRAMES = int(os.environ.get("DS_VDA_ONEPASS_FRAMES", "1500"))

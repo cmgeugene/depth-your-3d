@@ -94,6 +94,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .tag-depth { background: #143526; color: var(--ok); }
 .tag-edit { background: #3b2c10; color: var(--warn); }
 .tag-clean { background: #2b2142; color: var(--step4); }
+.tag-clay { background: #2a2d33; color: #d5d9e0; }
 /* upscale page: controls for videos or for images only */
 .upscale-image .vid-only, .upscale-video .img-only { display: none !important; }
 .thumb-strip { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -179,6 +180,7 @@ textarea { width: 100%; padding: 6px 8px; background: #15181c; color: var(--text
 }
 .dropzone.drag, .dropzone:hover { border-color: var(--accent); color: var(--text); background: #16202b; }
 .dropzone strong { color: var(--text); font-size: 15px; }
+.dropzone.small { min-height: 96px; padding: 14px; }
 
 .progress { height: 6px; background: #0f1114; border-radius: 3px; overflow: hidden; }
 .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import cleanup, config, depth, sam, upscale
+from . import clay, cleanup, config, depth, sam, upscale
 from .jobs import Media, Registry, new_id
 
 app = FastAPI(title="휴먼에이 영상 처리 스튜디오")
@@ -45,12 +45,14 @@ def status():
         "models": [{"key": k, **config.MODELS[k]} for k in config.ENABLED_MODELS],
         "default_model": config.DEFAULT_MODEL if config.DEFAULT_MODEL in config.ENABLED_MODELS else config.ENABLED_MODELS[0],
         "input_sizes": config.INPUT_SIZES,
+        "vda_modes": config.VDA_MODES,
         "cut_threshold": config.CUT_THRESHOLD,
         "cut_min_shot": config.CUT_MIN_SHOT,
         "max_upload_mb": config.MAX_UPLOAD_MB,
         "ttl_hours": config.TTL_HOURS,
         "upscale": {**upscale.engines(), "max_side": config.UPSCALE_MAX_SIDE},
         "cleanup": {**cleanup.status(), "sam": sam.status()},
+        "clay": {**clay.status(), "max_frames": config.CLAY_MAX_FRAMES},
     }
 
 
@@ -148,6 +150,8 @@ class DepthParams(BaseModel):
     temporal: float = Field(0.0, ge=0, le=4)
     invert: bool = False
     gamma: float = Field(1.0, ge=0.2, le=5)
+    vda_mode: str = "offline"  # video models only: offline | stream
+    face_contour: float = Field(0.0, ge=0, le=1)  # 0 = off; simplify face/neck silhouettes in close-ups
 
 
 class Outputs(BaseModel):
@@ -166,18 +170,28 @@ class JobRequest(BaseModel):
     timing: dict | None = None  # editor spec, stored alongside the output for reference
 
 
+def _check_depth(d: DepthParams):
+    if d.model not in config.ENABLED_MODELS:
+        raise HTTPException(400, "사용할 수 없는 모델입니다.")
+    if d.input_size not in config.INPUT_SIZES:
+        raise HTTPException(400, "지원하지 않는 입력 해상도입니다.")
+    if d.vda_mode not in config.VDA_MODES:
+        raise HTTPException(400, "영상용 모델 처리 방식이 올바르지 않습니다.")
+    allowed = config.MODELS[d.model].get("modes")
+    if allowed and d.vda_mode not in allowed:
+        modes = ", ".join(config.VDA_MODES[m] for m in allowed)
+        raise HTTPException(400, f"{config.MODELS[d.model]['label']}은(는) {modes} 방식만 쓸 수 있습니다.")
+    if d.norm not in ("shot", "adaptive", "clip", "frame"):
+        raise HTTPException(400, "정규화 방식이 올바르지 않습니다.")
+
+
 @app.post("/api/jobs")
 def create_job(req: JobRequest):
     media = _ready(_media(req.media_id), "video")
     o, d = req.outputs, req.depth
     if not (o.depth_mp4 or o.depth_png or o.stepped_mp4):
         raise HTTPException(400, "출력을 하나 이상 선택하세요.")
-    if d.model not in config.ENABLED_MODELS:
-        raise HTTPException(400, "사용할 수 없는 모델입니다.")
-    if d.input_size not in config.INPUT_SIZES:
-        raise HTTPException(400, "지원하지 않는 입력 해상도입니다.")
-    if d.norm not in ("shot", "adaptive", "clip", "frame"):
-        raise HTTPException(400, "정규화 방식이 올바르지 않습니다.")
+    _check_depth(d)
     n = media.frames
     if req.map is not None:
         m = req.map
@@ -266,6 +280,49 @@ def create_cleanup_job(req: CleanupRequest):
     p.update(masked=bool(files), seed=req.seed if req.seed is not None else secrets.randbelow(2**31 - 4),
              prompt=req.prompt.strip() or cleanup.DEFAULT_PROMPT)
     job = registry.submit(media, {"kind": "cleanup", "cleanup": p}, files)
+    return registry.job_public(job)
+
+
+class ClayRequest(BaseModel):
+    media_id: str
+    mode: str = "head"  # head: body shape kept, head neutral | neutral: everything neutral
+    smooth: float = Field(2.0, ge=0, le=6)  # temporal Gaussian sigma in frames
+    max_people: int = Field(2, ge=1, le=4)
+    bg: str = "auto"  # none | auto (depth generated in the same job) | upload (depth_media_id)
+    bg_mode: str = "overlay"  # overlay | remove (people filled out of the depth first)
+    depth_media_id: str | None = None
+    depth: DepthParams = DepthParams()  # bg = auto: settings of the depth made in the same job
+    cuts: list[int] | None = None  # None: the cuts found at upload; [] treats the clip as one shot
+
+
+@app.post("/api/clay-jobs")
+def create_clay_job(req: ClayRequest):
+    media = _ready(_media(req.media_id), "video")
+    st = clay.status()
+    if not st["available"]:
+        raise HTTPException(409, st["reason"])
+    if req.mode not in clay.MODES or req.bg not in clay.BACKGROUNDS or req.bg_mode not in clay.BG_MODES:
+        raise HTTPException(400, "설정 값이 올바르지 않습니다.")
+    if media.frames > config.CLAY_MAX_FRAMES:
+        raise HTTPException(400, f"영상이 너무 깁니다 ({media.frames}프레임, 최대 {config.CLAY_MAX_FRAMES}프레임).")
+    n = media.frames
+    cuts = media.cuts if req.cuts is None else req.cuts
+    if any(not 0 < c < n for c in cuts):
+        raise HTTPException(400, "컷 위치가 올바르지 않습니다.")
+    if req.bg == "auto":
+        _check_depth(req.depth)
+    p = req.model_dump(exclude={"media_id"})
+    p["cuts"] = sorted(set(cuts))
+    if req.bg == "upload":
+        if not req.depth_media_id:
+            raise HTTPException(400, "depth 영상을 올리세요.")
+        dm = _ready(_media(req.depth_media_id), "video")
+        if abs(dm.frames - n) > 2:
+            raise HTTPException(400, f"depth 영상의 프레임 수({dm.frames})가 원본({n})과 다릅니다. 같은 영상으로 만든 depth를 올리세요.")
+        p["depth_src"] = str(dm.src)
+    else:
+        p["depth_media_id"] = None
+    job = registry.submit(media, {"kind": "clay", "clay": p})
     return registry.job_public(job)
 
 

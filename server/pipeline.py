@@ -8,10 +8,11 @@ import json
 import math
 import zipfile
 
+import cv2
 import numpy as np
 from PIL import Image
 
-from . import config, depth, video
+from . import config, depth, depth_face, video, video_depth as vda
 
 
 class Cancelled(Exception):
@@ -106,15 +107,36 @@ def _render_depth(media, fmap, cuts, dp, outs, job_dir, audio_src, report):
     n = len(fmap)
     h, w = media.height, media.width
     report("infer", 0, f"모델 로딩 ({config.MODELS[dp['model']]['label']})")
-    model = depth.get_model(dp["model"])
+    video_model = vda.is_video_model(dp["model"])
+    streaming = video_model and dp.get("vda_mode") == "stream"
+    model = vda.get_model(dp["model"], streaming) if video_model else depth.get_model(dp["model"])
     size = depth.infer_size(h, w, dp["input_size"])
 
     uniq = sorted(set(fmap))
     rank = {src: r for r, src in enumerate(uniq)}
+    # Video models run shot by shot over the drawings (unique frames); these are the ranks where
+    # a shot starts.
+    shot_starts = sorted({rank[fmap[s]] for s, _ in shot_ranges(n, cuts)})
     raw_path = job_dir / "raw.npy"
     raw = np.lib.format.open_memmap(raw_path, mode="w+", dtype=np.float16, shape=(len(uniq), *size))
+    face_strength = float(dp.get("face_contour", 0.0))
+    face_model, faces, faces_path = None, None, job_dir / "faces.npy"
+    if face_strength > 0:
+        report("infer", 0, "얼굴 분할 모델 로딩")
+        face_model = depth_face.get_model()
+        faces = np.lib.format.open_memmap(faces_path, mode="w+", dtype=np.uint8, shape=(len(uniq), depth_face.CHANNELS, *size))
 
     # Pass 1: inference on each unique source frame, raw disparity cached at model resolution.
+    # Image models (and the face parser) take batches of full frames. Video models take sequences at
+    # working size. Streaming restarts at every cut: it only remembers past frames, so it would carry
+    # the previous shot's depth range into the next one for a second or two. Offline windows see
+    # frames on both sides and settle right after a cut, so short clips go through in one pass.
+    stream = vda.Stream(model, dp["input_size"]) if streaming else None
+    if stream is None and len(uniq) <= config.VDA_ONEPASS_MAX_FRAMES:
+        starts = {0}
+    else:
+        starts = set(shot_starts)
+    shot_buf, shot_first = [], 0
     batch, first = [], 0
     done = 0
     with video.FrameReader(media.src, w, h) as reader:
@@ -124,12 +146,30 @@ def _render_depth(media, fmap, cuts, dp, outs, job_dir, audio_src, report):
             if frame is None:
                 break
             if idx == uniq[done]:
+                r = done
+                if video_model:
+                    small = cv2.resize(frame, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+                    if stream is not None:
+                        if r in starts:
+                            stream.start()
+                        raw[r] = stream.predict(small)
+                    else:
+                        if r in starts:
+                            shot_buf, shot_first = [], r
+                        shot_buf.append(small)
+                        if r + 1 == len(uniq) or (r + 1) in starts:
+                            report("infer", r / len(uniq), f"Depth 추론 {r + 1}/{len(uniq)}")
+                            raw[shot_first:r + 1] = vda.predict_shot(model, shot_buf, dp["input_size"])
+                            shot_buf = []
                 if not batch:
-                    first = done
+                    first = r
                 batch.append(frame)
                 done += 1
                 if len(batch) == config.BATCH_SIZE or done == len(uniq):
-                    raw[first:done] = depth.predict(model, batch, size)
+                    if not video_model:
+                        raw[first:done] = depth.predict(model, batch, size)
+                    if face_model is not None:
+                        faces[first:done] = depth_face.predict(face_model, batch, size)
                     batch = []
                     report("infer", done / len(uniq), f"Depth 추론 {done}/{len(uniq)} (그림 수 기준)")
             idx += 1
@@ -176,6 +216,12 @@ def _render_depth(media, fmap, cuts, dp, outs, job_dir, audio_src, report):
                     sigma = float(dp["adaptive_window"]) * media.fps / frames_per_drawing
                     los, his = gaussian_smooth(los, sigma), gaussian_smooth(his, sigma)
 
+            if faces is not None:
+                # Per-drawing face size -> strength, smoothed over ~0.2 s so a push-in eases in.
+                fstats = np.array([depth_face.face_stats(faces[r]) for r in shot_ranks])
+                fsig = 0.2 * media.fps / ((e - s) / len(shot_ranks))
+                f_area, f_scale = gaussian_smooth(fstats[:, 0], fsig), gaussian_smooth(fstats[:, 1], fsig)
+
             radius = int(math.ceil(sigma_t * 2)) if sigma_t > 0 else 0
             last_k, u8, png = None, None, None
             for i in range(s, e):
@@ -186,6 +232,13 @@ def _render_depth(media, fmap, cuts, dp, outs, job_dir, audio_src, report):
                     v = depth.finish([raw[shot_ranks[j]] for j in ks], weights,
                                      [los[j] for j in ks], [his[j] for j in ks],
                                      (h, w), bool(dp["invert"]), float(dp["gamma"]))
+                    if faces is not None:
+                        # Masks blended over neighbouring drawings so the new contour does not flicker.
+                        fk = range(max(0, k - 1), min(len(shot_ranks), k + 2))
+                        fw = np.array([1.0 if j == k else 0.5 for j in fk], np.float32)
+                        probs = sum(faces[shot_ranks[j]].astype(np.float32) * wj for j, wj in zip(fk, fw)) / fw.sum()
+                        v = depth_face.simplify(v, probs, depth_face.strength_for(f_area[k], face_strength),
+                                                float(f_scale[k]), bool(dp["invert"]))
                     u8 = (v * 255 + 0.5).astype(np.uint8)
                     if zf is not None:
                         buf = io.BytesIO()
@@ -206,11 +259,12 @@ def _render_depth(media, fmap, cuts, dp, outs, job_dir, audio_src, report):
             zf.close()
         raise
     finally:
-        del raw
-        try:
-            raw_path.unlink(missing_ok=True)
-        except OSError:
-            pass  # still mapped on Windows; the job directory cleanup removes it later
+        del raw, faces
+        for path in (raw_path, faces_path):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass  # still mapped on Windows; the job directory cleanup removes it later
     if writer is not None:
         writer.close()
     if zf is not None:

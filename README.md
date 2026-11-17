@@ -5,9 +5,18 @@
 - **업스케일** (`/upscale`): 2D 애니메이션 영상을 Real-ESRGAN(animevideov3) 또는 Lanczos로 2배·4배 확대, 선택적으로 RIFE 프레임 보간(FPS 2배). 오디오·자막·메타데이터 보존. 결과를 바로 프레임 편집기로 보낼 수 있습니다.
   - **이미지도 됩니다**: png · jpg · webp · bmp · tif를 한 장 또는 여러 장(최대 200장) 한 번에 올리면 같은 설정으로 확대합니다. 출력은 PNG/JPG/WebP 중 선택하고, 여러 장이면 zip 하나로 받습니다. 투명도는 유지되며(JPG는 흰 배경), 투명도가 있는 이미지는 노이즈 제거를 건너뜁니다.
 - **모션 트랜스퍼 영상 변환** (`/depth`, 예전 이름 Depth 변환): 실사 영상 업로드 → Depth Anything V2로 흑백 depth 영상(mp4) / 16bit PNG 시퀀스(zip) 생성 → 다운로드
+  - **결과 종류**: Depth / 클레이 / Depth + 클레이 중에서 고릅니다. 컷은 세 가지 모두 같은 컷 감지 민감도 슬라이더로 정합니다.
+  - **클레이**: Seedance v2v 레퍼런스용. 실사 인물을 SAM 3D Body로 3D 복원해 회색 클레이 마네킹으로 렌더합니다. 몸 동작·고개 각도·카메라는 넘기고, 머리는 평균 얼굴·무표정으로 바꿔 배우 얼굴형은 넘기지 않습니다. 체형 유지(머리만 중립)/모두 중립, 흔들림 보정 강도, 최대 인원을 고릅니다. 컷마다 인물 추적과 초점거리를 새로 잡으니, 빠른 푸시인처럼 컷이 아닌데 잡히면 민감도 값을 올리세요.
+  - **Depth + 클레이**: 같은 작업에서 위 depth 설정으로 depth를 만들고 그 위에 클레이를 얹습니다(사람을 지우고 얹는 방식도 선택 가능). 방 배치·소품까지 넘어가서 지금까지 가장 결과가 좋은 조합입니다. depth mp4도 함께 받습니다. 설치는 아래 "클레이 설치".
+  - **영상용 모델 (Video Depth Anything, 기본)**: 모델 목록의 "Video …" 항목은 앞뒤 프레임을 함께 보는 영상용 depth 모델입니다. 이미지용 V2는 프레임마다 따로 추정해서 머리카락·옷·피부 면이 꿈틀거리는데, 영상용은 이 떨림이 절반 정도로 줄어듭니다. Small(기본)은 Apache-2.0이라 상업 작업에 쓸 수 있고, Large는 비상업 전용입니다. 영상용 모델을 고르면 처리 방식을 고를 수 있습니다.
+    - 오프라인 (기본): 32프레임 창을 겹쳐 가며 처리합니다. 가장 안정적입니다. 컷을 넘어도 금방 새 장면에 맞춰지므로 영상 전체를 한 번에 추론하고, 컷은 밝기 정규화에만 씁니다. 그래서 컷을 잘못 잡아도 depth가 끊기지 않습니다. 모든 그림을 메모리에 올리므로 `DS_VDA_ONEPASS_FRAMES`(기본 1500)장을 넘는 영상은 컷마다 따로 추론합니다. Small만 쓸 수 있습니다 (Large 오프라인은 VRAM이 24GB를 넘을 수 있어서 막아 둠).
+    - 스트리밍: 한 프레임씩 처리해 VRAM을 적게 씁니다 (Small 약 1GB, Large 약 5GB). Large는 이 방식만 쓸 수 있습니다. 원 저장소에서는 실험 기능이라 정확도가 조금 낮습니다. 지난 프레임만 기억하므로 컷마다 새로 시작합니다 (이어 가면 새 컷의 처음 1~2초가 앞 컷의 깊이 범위를 따라감). 잘못 잡힌 컷이 있으면 그 자리에서 depth가 한 번 튀니, 컷 위치를 확인하고 변환하세요.
+    - 코드는 `server/vda`에 옮겨 두었고 (출처·변경점은 `server/vda/README.md`), 가중치는 처음 쓸 때 Hugging Face에서 내려받습니다 (Small 약 120MB, Large 약 1.5GB).
+    - 16:9보다 넓은 영상은 모델이 입력 해상도를 스스로 줄입니다 (21:9에서 짧은 변 약 406px). 그래서 V2보다 경계가 조금 부드럽습니다.
+  - **얼굴 윤곽 단순화**: 미디엄·클로즈업에서 depth의 얼굴·목 실루엣(코끝, 입술, 턱 밑 꺾임)을 단순한 곡선으로 바꿉니다. 실사 턱선이 2D 얼굴에 그대로 찍히는 문제를 줄이기 위한 옵션입니다. 얼굴 부위 분할(SegFormer face-parsing, 처음 쓸 때 Hugging Face에서 내려받음)로 얼굴·목을 찾고, 배경과 맞닿은 경계만 고칩니다. 머리카락·몸·배경 depth는 그대로입니다. 얼굴이 화면에서 차지하는 크기에 따라 강도가 자동으로 올라가서 와이드샷은 바뀌지 않습니다.
 - **얼룩 정리** (`/cleanup`): GPT Image로 만든 2D 이미지의 자글자글한 얼룩·픽셀 노이즈를 FLUX.1 [dev] img2img(denoise 0.15~0.2)로 약하게 다시 그려 정리합니다. 브러시로 정리할 곳만 칠하거나, 지킬 곳(얼굴 등)을 칠한 뒤 반전할 수 있습니다. 마스크 밖 픽셀은 원본 그대로 유지됩니다.
 - **프레임 편집기 (Beta)** (`/editor`): 실사처럼 너무 부드럽게 움직이는 부분을 1s/1.5s/2s… 애니메이션 타이밍으로 다시 잡아 스텝 영상(mp4)으로 렌더. Depth는 쓰지 않습니다.
-- 업스케일, 모션 트랜스퍼, 얼룩 정리 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 각 페이지의 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
+- 업스케일, 모션 트랜스퍼(클레이 포함), 얼룩 정리 작업은 GPU 하나를 공유하는 대기열로 순서대로 처리됩니다. 편집기 렌더는 GPU가 필요 없어 이 대기열을 거치지 않고 CPU에서 바로 처리됩니다. 각 페이지의 "서버 대기열"에서 모든 사용자의 작업을 볼 수 있습니다 (다운로드는 자기 작업만). 업로드/결과는 24시간 뒤 자동 삭제.
 - mp4 결과물에 원본 오디오를 넣을지 선택할 수 있습니다.
 
 ## 실행
@@ -20,7 +29,7 @@ run.bat        # Windows, 이 PC에서만 (http://localhost:8000)
 ./run.sh       # Linux, 내부망 공유
 ```
 
-첫 실행 때 `.venv`를 만들고 torch 2.11(CUDA 12.8, 얼룩 정리의 Nunchaku가 지원하는 버전으로 고정)과 의존성을 설치합니다. 이후에는 `requirements.txt`가 바뀌었을 때만 다시 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (Large 약 1.3GB).
+첫 실행 때 `.venv`를 만들고 torch 2.11(CUDA 12.8, 얼룩 정리의 Nunchaku가 지원하는 버전으로 고정)과 의존성을 설치합니다. 이후에는 `requirements.txt`가 바뀌었을 때만 다시 설치합니다. 모델은 처음 쓸 때 Hugging Face에서 내려받습니다 (기본 Video Small 약 120MB, 이미지 Large 약 1.3GB, Video Large 약 1.5GB).
 서버가 뜨면 창에 접속 주소가 나옵니다 (`같은 네트워크의 다른 PC: http://192.168.x.x:8000`). 이 주소를 공유하면 됩니다.
 다른 PC에서 안 열리면 방화벽에서 포트를 열어야 합니다. 필요한 명령도 같은 창에 나옵니다 (관리자 권한으로 한 번만 실행).
 
@@ -61,6 +70,27 @@ setup-flux.bat    # Nunchaku(INT4 Flux 실행 엔진)를 torch 버전에 맞춰 
 - 기본값(20스텝, denoise 0.18, guidance 3.5, euler)은 ComfyUI 워크플로 `flux1_dev_i2i_pixel_noise_cleanup`과 같은 방식입니다. "스텝"은 실제로 도는 스텝 수입니다 (ComfyUI KSampler와 같음).
 - **라이선스**: FLUX.1 [dev] 가중치는 비상업 라이선스입니다. 결과물은 상업적으로 써도 되지만, 서버를 상업 서비스로 운영하려면 BFL 라이선스가 필요합니다.
 
+### 클레이 설치 (서버에서 한 번)
+
+SAM 3D Body는 Python 3.11 전용 환경이 필요해서 스튜디오 `.venv`와 따로 둡니다. 다른 폴더에 설치하고 그 Python을 `DS_CLAY_PYTHON`, 저장소를 `DS_CLAY_REPO`로 지정하면 별도 프로세스로 돌립니다. 지정하지 않으면 모션 트랜스퍼 페이지의 클레이 선택지가 꺼집니다.
+
+1. https://huggingface.co/facebook/sam-3d-body-dinov3 에서 접근 승인 (스튜디오와 같은 Hugging Face 토큰 사용)
+2. 저장소 받기: `git clone https://github.com/facebookresearch/sam-3d-body.git`
+3. 그 폴더에서 환경 만들기 (detectron2는 필요 없음: 사람 검출은 RT-DETR로 직접 함)
+
+```
+uv venv --python 3.11 .venv
+uv pip install --python .venv\Scripts\python.exe torch torchvision --index-url https://download.pytorch.org/whl/cu128
+uv pip install --python .venv\Scripts\python.exe pytorch-lightning pyrender opencv-python yacs scikit-image einops timm dill pandas rich hydra-core hydra-colorlog pyrootutils webdataset networkx==3.2.1 roma joblib jsonlines loguru optree fvcore huggingface_hub transformers moderngl "git+https://github.com/microsoft/MoGe.git"
+```
+
+- 첫 작업은 SAM 3D Body(약 2.7GB)·MoGe-2·RT-DETR·ViTPose·SegFormer를 올리느라 1~3분 더 걸립니다. 처음 쓸 때 Hugging Face와 torch hub에서 내려받습니다.
+- VRAM: 작업 프로세스 최대 약 6GB. 작업이 끝나고 `DS_CLAY_IDLE_SEC`초 동안 다음 작업이 없으면 프로세스를 끝내 VRAM을 돌려줍니다. 취소하면 프로세스를 바로 끝냅니다.
+- 처리 시간: 사람 1명당 프레임마다 SAM 3D Body를 한 번씩 돕니다. RTX 3070 Ti 8GB 기준 103프레임 1명 + depth 자동 생성에 약 11분(모델 로딩 2.5분 포함, 메모리가 빠듯해 느림). 4090은 훨씬 빠릅니다.
+- 모든 프레임의 메시를 메모리에 올리므로 `DS_CLAY_MAX_FRAMES`프레임을 넘는 영상은 받지 않습니다.
+- 얼굴 표정은 넘기지 않습니다. SAM 3D Body 공개 버전은 표정 출력이 꺼져 있고, 켜도 실제 표정을 따라가지 않습니다. 표정은 프롬프트로 지정합니다.
+- 로그는 `data/clay-worker.log`.
+
 ## 설정 (환경 변수)
 
 | 변수 | 기본값 | 설명 |
@@ -70,8 +100,9 @@ setup-flux.bat    # Nunchaku(INT4 Flux 실행 엔진)를 torch 버전에 맞춰 
 | `DS_TTL_HOURS` | `24` | 파일 보관 시간 |
 | `DS_MAX_UPLOAD_MB` | `4096` | 업로드 최대 크기 |
 | `DS_BATCH` | `8` | 한 번에 추론할 프레임 수 (24GB 기준 8, VRAM 부족하면 낮춤) |
-| `DS_MODELS` | `small,base,large` | 사용자에게 보여줄 모델 |
-| `DS_DEFAULT_MODEL` | `large` | 기본 선택 모델 |
+| `DS_MODELS` | `vda_small,vda_large,small,base,large` | 사용자에게 보여줄 모델 (`vda_*`는 영상용, 나머지는 이미지용 V2) |
+| `DS_DEFAULT_MODEL` | `vda_small` | 기본 선택 모델 |
+| `DS_VDA_ONEPASS_FRAMES` | `1500` | 영상용 모델 오프라인에서 영상 전체를 한 번에 추론할 최대 그림 수. 넘으면 컷마다 추론 |
 | `DS_CPU_WORKERS` | `2` | 편집기 스텝 영상 렌더를 동시에 몇 개까지 돌릴지 (GPU 대기열과 별도) |
 | `DS_MAX_EDITOR_FRAMES` | `3000` | 편집기를 쓸 수 있는 최대 프레임 수 (24fps 기준 약 2분) |
 | `DS_CUT_THRESHOLD` / `DS_CUT_MIN_SHOT` | `12` / `6` | 컷 자동 감지 민감도 / 최소 샷 길이 |
@@ -82,14 +113,20 @@ setup-flux.bat    # Nunchaku(INT4 Flux 실행 엔진)를 torch 버전에 맞춰 
 | `DS_CLEANUP_MAX_MP` | `4.2` | 얼룩 정리 최대 이미지 크기(메가픽셀, 2048×2048 ≈ 4.2) |
 | `DS_SAM3_PYTHON` / `DS_SAM3_CHECKPOINT` | (없음) | 자동 선택용 SAM 3.1 Python 실행 파일 / `sam3.1_multiplex.pt` 경로 |
 | `DS_SAM3_IDLE_SEC` | `120` | 자동 선택 요청이 없을 때 SAM 3.1 프로세스를 끝내기까지의 시간(초) |
+| `DS_CLAY_PYTHON` / `DS_CLAY_REPO` | (없음) | 클레이용 SAM 3D Body 환경의 Python 실행 파일 / 저장소 폴더 |
+| `DS_CLAY_CHECKPOINT` | `facebook/sam-3d-body-dinov3` | SAM 3D Body 체크포인트 (Hugging Face 저장소 이름) |
+| `DS_CLAY_IDLE_SEC` | `300` | 클레이 작업이 없을 때 SAM 3D Body 프로세스를 끝내기까지의 시간(초) |
+| `DS_CLAY_MAX_FRAMES` | `3000` | 클레이 작업으로 받을 최대 프레임 수 |
 | `DS_FLUX_REPO` / `DS_FLUX_TRANSFORMER` | FLUX.1-dev / 자동 | 텍스트 인코더·VAE를 받을 저장소 / Nunchaku 가중치 경로 (`repo/file.safetensors`) |
 
 ## 라이선스 주의
 
 - Depth-Anything-V2 **Small**: Apache-2.0 (상업 사용 가능)
 - Depth-Anything-V2 **Base / Large**: **CC-BY-NC-4.0 (비상업)**
+- Video-Depth-Anything **Small**: Apache-2.0 (상업 사용 가능)
+- Video-Depth-Anything **Large**: **CC-BY-NC-4.0 (비상업)**
 
-상업 프로젝트에 쓸 서버라면 `DS_MODELS=small`로 제한하는 것을 고려하세요. UI에도 모델별 라이선스가 표시됩니다.
+상업 프로젝트에 쓸 서버라면 `DS_MODELS=vda_small,small`로 제한하는 것을 고려하세요 (둘 다 Apache-2.0). UI에도 모델별 라이선스가 표시됩니다.
 
 ## Depth 처리 방식
 

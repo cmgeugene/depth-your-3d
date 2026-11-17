@@ -1,6 +1,6 @@
 """In-memory registry of uploaded media and render jobs, plus the workers that run them.
 
-Depth, upscale and image cleanup jobs run one at a time in submission order on the single GPU worker, so
+Depth, upscale, image cleanup and clay jobs run one at a time in submission order on the single GPU worker, so
 everyone shares the GPU fairly. Jobs that need no GPU (stepped video from the editor) go to a
 small CPU pool instead and never wait behind GPU jobs.
 State is lost on restart; files on disk are swept by the TTL cleaner.
@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import cleanup, config, motion, pipeline, upscale, video
+from . import clay, cleanup, config, motion, pipeline, upscale, video
 
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -32,11 +32,20 @@ def safe_stem(filename: str) -> str:
     return stem[:80] or "video"
 
 
+def _model_label(dp: dict) -> str:
+    spec = config.MODELS[dp["model"]]
+    if "vda" not in spec:
+        return spec["label"]
+    return f"{spec['label']} · {config.VDA_MODES.get(dp.get('vda_mode', 'offline'), '')}"
+
+
 def _summary(media: "Media", params: dict) -> dict:
     if params.get("kind") == "upscale":
         return upscale.summary(media, params["upscale"])
     if params.get("kind") == "cleanup":
         return cleanup.summary(media, params["cleanup"])
+    if params.get("kind") == "clay":
+        return clay.summary(media, params["clay"])
     outs = params["outputs"]
     fmap = params.get("map")
     want_depth = outs.get("depth_mp4") or outs.get("depth_png")
@@ -45,7 +54,7 @@ def _summary(media: "Media", params: dict) -> dict:
         "resolution": f"{media.width}×{media.height}",
         "frames": media.frames,
         "drawings": len(set(fmap)) if fmap else media.frames,
-        "model": config.MODELS[params["depth"]["model"]]["label"] if want_depth else None,
+        "model": _model_label(params["depth"]) if want_depth else None,
         "outputs": [label for key, label in (("stepped_mp4", "스텝 영상"), ("depth_mp4", "Depth mp4"),
                                              ("depth_png", "PNG16")) if outs.get(key)]
                    + (["오디오"] if with_audio else []),
@@ -113,7 +122,7 @@ class Job:
 
     @property
     def kind(self) -> str:
-        return self.params.get("kind", "depth")  # depth | upscale | cleanup
+        return self.params.get("kind", "depth")  # depth | upscale | cleanup | clay
 
 
 class Registry:
@@ -203,7 +212,7 @@ class Registry:
         for name, data in (files or {}).items():
             (job_dir / name).write_bytes(data)
         outs = params.get("outputs", {})
-        gpu = params.get("kind") in ("upscale", "cleanup") or outs.get("depth_mp4") or outs.get("depth_png")
+        gpu = params.get("kind") in ("upscale", "cleanup", "clay") or outs.get("depth_mp4") or outs.get("depth_png")
         lane = "gpu" if gpu else "cpu"
         job = Job(id=job_id, media_id=media.id, params=params, dir=job_dir, summary=_summary(media, params), lane=lane)
         with self.lock:
@@ -289,7 +298,7 @@ class Registry:
         try:
             if media is None or media.status != "ready":
                 raise RuntimeError("원본 파일이 만료되었거나 준비되지 않았습니다.")
-            runner = {"upscale": upscale.run, "cleanup": cleanup.run}.get(job.kind, pipeline.run)
+            runner = {"upscale": upscale.run, "cleanup": cleanup.run, "clay": clay.run}.get(job.kind, pipeline.run)
             job.outputs = runner(job, media, progress)
             job.status, job.progress, job.stage = "done", 1.0, "완료"
         except pipeline.Cancelled:
@@ -313,7 +322,8 @@ class Registry:
             cutoff = time.time() - config.TTL_HOURS * 3600
             active = [j for j in self.jobs.values() if j.status in ("queued", "running")]
             # an image batch reads every image of the batch, not only the first
-            busy = {m for j in active for m in [j.media_id, *j.params.get("upscale", {}).get("media_ids", [])]}
+            busy = {m for j in active for m in [j.media_id, *j.params.get("upscale", {}).get("media_ids", []),
+                                                j.params.get("clay", {}).get("depth_media_id")] if m}
             for base, table in ((config.MEDIA_DIR, self.media), (config.JOBS_DIR, self.jobs)):
                 for d in base.iterdir():
                     if not d.is_dir() or d.stat().st_mtime > cutoff or d.name in busy:

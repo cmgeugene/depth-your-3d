@@ -158,7 +158,7 @@ export async function uploadAndPrepare(file, box, preparing = "영상 분석 중
 
 const DEPTH_DEFAULTS = {
   model: null, input_size: 518, norm: "shot", adaptive_window: 1.0,
-  clip_lo: 1.0, clip_hi: 1.0, temporal: 0, gamma: 1.0, invert: false,
+  clip_lo: 1.0, clip_hi: 1.0, temporal: 0, gamma: 1.0, invert: false, face_contour: 0, vda_mode: "offline",
 };
 
 export function depthOptionsForm(container, status) {
@@ -168,6 +168,10 @@ export function depthOptionsForm(container, status) {
 
   const model = el("select", {}, status.models.map((m) =>
     el("option", { value: m.key }, `${m.label} · ${m.license}`)));
+  const vdaMode = el("select", {}, Object.entries(status.vda_modes || {}).map(([k, label]) =>
+    el("option", { value: k }, label)));
+  const modeNote = el("span", { class: "note" });
+  const modeRow = [el("label", {}, "처리 방식"), el("div", { class: "inline" }, vdaMode, modeNote)];
   const size = el("select", {}, status.input_sizes.map((s) =>
     el("option", { value: s }, s === 518 ? "518 (기본)" : s >= 1000 ? `${s} (고해상도, 느림)` : String(s))));
   const norm = el("select", {},
@@ -179,6 +183,7 @@ export function depthOptionsForm(container, status) {
   const range = (min, max, step) => el("input", { type: "range", min, max, step });
   const clipLo = range(0, 10, 0.5), clipHi = range(0, 10, 0.5), temporal = range(0, 3, 0.25), gamma = range(0.4, 2.5, 0.05);
   const invert = el("input", { type: "checkbox" });
+  const face = range(0, 1, 0.05);
   const licenseNote = el("div", { class: "note warn full" });
   const winRow = [el("label", {}, "적응 속도(초)"), el("div", { class: "inline" }, win, el("span", { class: "note" }, "클수록 밝기 변화가 느림"))];
 
@@ -192,13 +197,17 @@ export function depthOptionsForm(container, status) {
   const [hiRow, syncHi] = withVal(clipHi, (v) => `${v}%`);
   const [tRow, syncT] = withVal(temporal, (v) => (v ? v.toFixed(2) : "끔"));
   const [gRow, syncG] = withVal(gamma, (v) => v.toFixed(2));
+  const [fRow, syncF] = withVal(face, (v) => (v ? v.toFixed(2) : "끔"));
 
   container.replaceChildren(el("div", { class: "form" },
     el("label", {}, "모델"), model,
     licenseNote,
+    ...modeRow,
     el("label", {}, "입력 해상도"), size,
     el("label", {}, "밝기 정규화"), norm,
     ...winRow,
+    el("label", {}, "얼굴 윤곽 단순화"), fRow,
+    el("div", { class: "note full" }, "미디엄·클로즈업에서 실사 코·입술·턱선 윤곽을 지움. 얼굴이 작은 와이드샷은 그대로 둠. 머리카락·몸·배경 depth는 바꾸지 않음."),
     el("details", { class: "adv full" },
       el("summary", {}, "고급 설정"),
       el("div", { class: "form" },
@@ -213,18 +222,28 @@ export function depthOptionsForm(container, status) {
   const set = (o) => {
     model.value = o.model; size.value = o.input_size; norm.value = o.norm; win.value = o.adaptive_window;
     clipLo.value = o.clip_lo; clipHi.value = o.clip_hi; temporal.value = o.temporal; gamma.value = o.gamma;
-    invert.checked = o.invert;
-    syncLo(); syncHi(); syncT(); syncG(); refresh();
+    invert.checked = o.invert; face.value = o.face_contour; vdaMode.value = o.vda_mode;
+    syncLo(); syncHi(); syncT(); syncG(); syncF(); refresh();
   };
   const get = () => ({
     model: model.value, input_size: +size.value, norm: norm.value, adaptive_window: +win.value || 1,
     clip_lo: +clipLo.value, clip_hi: +clipHi.value, temporal: +temporal.value, gamma: +gamma.value,
-    invert: invert.checked,
+    invert: invert.checked, face_contour: +face.value, vda_mode: vdaMode.value,
   });
   const refresh = () => {
     const m = status.models.find((x) => x.key === model.value);
     licenseNote.textContent = m && m.license.includes("NC") ? `${m.label}은(는) ${m.license} — 비상업 용도로만 사용 가능합니다.` : "";
     licenseNote.hidden = !licenseNote.textContent;
+    const video = !!(m && m.vda);
+    modeRow.forEach((n) => (n.hidden = !video));
+    // a model may allow only some modes (Large: streaming only, offline needs more VRAM than the server has)
+    const allowed = (video && m.modes) || Object.keys(status.vda_modes || {});
+    for (const o of vdaMode.options) o.disabled = !allowed.includes(o.value);
+    if (video && !allowed.includes(vdaMode.value)) vdaMode.value = allowed[0];
+    const streamOnly = video && allowed.length === 1 && allowed[0] === "stream";
+    modeNote.textContent = vdaMode.value === "stream"
+      ? (streamOnly ? "이 모델은 스트리밍만 가능 (오프라인은 VRAM 24GB 초과). " : "") + "한 프레임씩 처리함. VRAM 적게 씀. 컷마다 새로 시작함."
+      : "가장 안정적임. 영상 전체를 한 번에 추론함.";
     winRow.forEach((n) => (n.hidden = norm.value !== "adaptive"));
     store("ds-depth-opts", get());
   };
@@ -248,13 +267,13 @@ export function recentJobs(add) {
 }
 
 // Renders a self-updating card for a job. Returns the element.
-// kind: show only jobs of this kind ("depth" | "upscale" | "cleanup"); actions(j): extra controls for a finished job.
+// kind: show only jobs of this kind or kinds ("depth" | "upscale" | "cleanup" | "clay", or an array); actions(j): extra controls for a finished job.
 export function jobCard(jobId, { onGone, kind, actions } = {}) {
   const card = el("div", { class: "job" });
   let stopped = false;
 
   const render = (j) => {
-    if (kind && (j.kind || "depth") !== kind) {
+    if (kind && ![].concat(kind).includes(j.kind || "depth")) {
       stopped = true;
       card.remove();
       onGone && onGone(jobId);
@@ -316,6 +335,7 @@ export function jobCard(jobId, { onGone, kind, actions } = {}) {
 function kindTag(j) {
   if (j.kind === "upscale") return el("span", { class: "badge tag-up" }, "업스케일");
   if (j.kind === "cleanup") return el("span", { class: "badge tag-clean" }, "얼룩 정리");
+  if (j.kind === "clay") return el("span", { class: "badge tag-clay" }, "클레이");
   if (j.lane === "cpu") return el("span", { class: "badge tag-edit" }, "편집기");
   return el("span", { class: "badge tag-depth" }, "모션 트랜스퍼");
 }
