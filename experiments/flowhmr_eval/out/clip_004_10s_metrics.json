@@ -1,0 +1,63 @@
+{
+ "frames": 300,
+ "fit_loss": 4480.32470703125,
+ "R_fit": [
+  [
+   -0.7718843221664429,
+   -0.18199029564857483,
+   -0.6091585755348206
+  ],
+  [
+   0.1537962406873703,
+   -0.9831464886665344,
+   0.0988416075706482
+  ],
+  [
+   -0.6168803572654724,
+   -0.01739201322197914,
+   0.7868647575378418
+  ]
+ ],
+ "t_fit": [
+  0.7051711082458496,
+  1.3746461868286133,
+  2.657452344894409
+ ],
+ "SAM_per_frame": {
+  "align_err_px_median": 17.324993133544922,
+  "align_err_px_mean": 32.37125015258789,
+  "jitter_px_per_frame2_upper": 13.98325252532959,
+  "jitter_px_per_frame2_all": 16.34544563293457
+ },
+ "SAM_gauss_sigma2_like_clay": {
+  "align_err_px_median": 20.189490120735407,
+  "align_err_px_mean": 33.663274039853825,
+  "jitter_px_per_frame2_upper": 2.9009517440279105,
+  "jitter_px_per_frame2_all": 2.87629189066222
+ },
+ "FlowHMR_static_rigid_fit": {
+  "align_err_px_median": 164.87706410246406,
+  "align_err_px_mean": 204.6637577861151,
+  "jitter_px_per_frame2_upper": 0.8270893595946237,
+  "jitter_px_per_frame2_all": 0.7996775722698686
+ },
+ "FlowHMR_static_camera_follow_fit": {
+  "align_err_px_median": 44.89240966359691,
+  "align_err_px_mean": 60.95562298766389,
+  "jitter_px_per_frame2_upper": 2.5469804722253695,
+  "jitter_px_per_frame2_all": 2.587681458660096
+ },
+ "FlowHMR_vggt_rotation_plus_smooth_t": {
+  "align_err_px_median": 41.73704593175496,
+  "align_err_px_mean": 57.46263977957374,
+  "jitter_px_per_frame2_upper": 2.3833966200004206,
+  "jitter_px_per_frame2_all": 2.3911583444108633
+ },
+ "FlowHMR_vggt_full_camera_global_fit": {
+  "align_err_px_median": 407.51945222799327,
+  "align_err_px_mean": 453.36993221438627,
+  "jitter_px_per_frame2_upper": 2.236194256957026,
+  "jitter_px_per_frame2_all": 2.0819725791653725
+ },
+ "ViTPose_own_jitter_upper": 33.72837829589844
+}

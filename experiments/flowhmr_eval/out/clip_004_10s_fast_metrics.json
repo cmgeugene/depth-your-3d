@@ -1,0 +1,32 @@
+{
+ "frames": 300,
+ "speed_s_per_frame": {
+  "original_median": 1.0631201000032888,
+  "fast_median": 0.8683537500037346
+ },
+ "mesh_difference": {
+  "vertex_mm_median": 5.8169374242424965,
+  "vertex_mm_p95": 52.5377444922924,
+  "pose_only_vertex_mm_median": 3.490857779979706,
+  "kp2d_px_median": 2.4961256980895996,
+  "kp2d_px_p95": 21.437545871734628,
+  "depth_rel_pct_median": 0.20157620310783386
+ },
+ "original_raw": {
+  "align_err_px_median": 17.32491816594619,
+  "jitter_px_per_frame2_upper": 13.983248050389141
+ },
+ "fast_raw": {
+  "align_err_px_median": 17.143465610313896,
+  "jitter_px_per_frame2_upper": 13.400966982205938
+ },
+ "original_sigma2_like_clay": {
+  "align_err_px_median": 20.18948906686331,
+  "jitter_px_per_frame2_upper": 2.9009516110228706
+ },
+ "fast_sigma2_like_clay": {
+  "align_err_px_median": 19.57200399710325,
+  "jitter_px_per_frame2_upper": 2.9302673070660274
+ },
+ "speedup_x": 1.2242937857972245
+}

@@ -1,0 +1,34 @@
+{
+ "frames": 300,
+ "SAM_per_frame": {
+  "align_err_px_median": 17.32491816594619,
+  "align_err_px_mean": 32.371248470663964,
+  "jitter_px_per_frame2_upper": 13.983248050389141,
+  "jitter_px_per_frame2_all": 16.345440058305815
+ },
+ "SAM_sigma2_like_clay": {
+  "align_err_px_median": 20.18948906686331,
+  "align_err_px_mean": 33.663274361356464,
+  "jitter_px_per_frame2_upper": 2.90095161102287,
+  "jitter_px_per_frame2_all": 2.8762920076061604
+ },
+ "ExMR_incam_raw": {
+  "align_err_px_median": 26.784947261843076,
+  "align_err_px_mean": 41.61237868641459,
+  "jitter_px_per_frame2_upper": 6.150640972850236,
+  "jitter_px_per_frame2_all": 6.317833605474814
+ },
+ "ExMR_incam_sigma2": {
+  "align_err_px_median": 27.781676091031002,
+  "align_err_px_mean": 42.00964876021054,
+  "jitter_px_per_frame2_upper": 2.5176307759510546,
+  "jitter_px_per_frame2_all": 2.4443055331209296
+ },
+ "ExMR_vs_own_2d_check_px": 5.024655922274573e-05,
+ "depth_z_relative_jitter_pct": {
+  "SAM_per_frame": 0.8676132315400389,
+  "SAM_sigma2": 0.06895897551870335,
+  "ExMR_raw": 0.39398341106655294,
+  "ExMR_sigma2": 0.07106581530272822
+ }
+}
