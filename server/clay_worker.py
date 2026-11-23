@@ -36,7 +36,9 @@ CHECKPOINT = os.environ.get("DS_CLAY_CHECKPOINT", "facebook/sam-3d-body-dinov3")
 PARAM_KEYS = ["global_rot", "body_pose_params", "hand_pose_params", "scale_params", "shape_params", "expr_params"]
 FINGERS = ["pinky", "ring", "middle", "index", "thumb"]
 WRIST = {"l": 9, "r": 10}  # COCO-17 left/right wrist, person-centric like MHR l_/r_
+MHR2COCO = [0, 1, 2, 3, 4, 5, 6, 7, 8, 62, 41, 9, 10, 11, 12, 13, 14]  # MHR70 keypoints in COCO-17 order
 MASK_DOWN = 4
+GUIDE_TREND = 12  # frames: depth_guide keeps SAM's depth trend slower than this Gaussian sigma
 
 
 def gaussian_smooth(x, idx, sigma):
@@ -121,8 +123,9 @@ class Engine:
             self.hand_v[s] = hand > 0.5
             self.arm_faces[s] = (arm > 0.5)[self.faces].all(1)
 
-    def _mhr(self, params, shape="pred", scale="pred"):
-        """Vertices for stacked per-frame params. shape/scale: pred | median | zero. Expression is always zero."""
+    def _mhr(self, params, shape="pred", scale="pred", keypoints=False):
+        """Vertices for stacked per-frame params. shape/scale: pred | median | zero. Expression is always zero.
+        keypoints: also return the 70 MHR keypoints (same space as the vertices)."""
         torch = self.torch
         t = {k: torch.tensor(params[k], device=DEV) for k in PARAM_KEYS}
 
@@ -133,19 +136,37 @@ class Engine:
                 return torch.median(v, dim=0).values.expand_as(v).contiguous()
             return v
 
-        out = []
+        out, kps = [], []
         with torch.no_grad():
             for a in range(0, len(t["global_rot"]), 64):
                 sl = slice(a, a + 64)
                 g = t["global_rot"][sl]
-                v = self.head.mhr_forward(torch.zeros_like(g), g, t["body_pose_params"][sl], t["hand_pose_params"][sl],
+                r = self.head.mhr_forward(torch.zeros_like(g), g, t["body_pose_params"][sl], t["hand_pose_params"][sl],
                                           pick(t["scale_params"], scale)[sl], pick(t["shape_params"], shape)[sl],
-                                          torch.zeros_like(t["expr_params"][sl]))
-                out.append(v.cpu().numpy())
-        return np.concatenate(out).astype(np.float32)
+                                          torch.zeros_like(t["expr_params"][sl]), return_keypoints=keypoints)
+                if keypoints:
+                    r, kp = r
+                    kps.append(kp[:, :70].cpu().numpy())
+                out.append(r.cpu().numpy())
+        v = np.concatenate(out).astype(np.float32)
+        return (v, np.concatenate(kps).astype(np.float32)) if keypoints else v
 
     # ---- job ----
     def run(self, req, emit):
+        est = self.estimate(req, emit)
+        emit(0.76, "클레이 메시 생성")
+        per_frame, focal = self.build(est, req)
+        self._render(req, per_frame, focal, est["masks"], est["W"], est["H"], est["n"], emit)
+        return {"ok": True, "people": len(est["tracks"]), "frames": est["n"]}
+
+    def estimate(self, req, emit):
+        """Pass 1: track people and run SAM 3D Body + ViTPose + person mask on every frame.
+
+        req options: fov_samples (MoGe-2 field of view from this many frames per shot, their median used for the
+        whole shot; 0 = every frame, as SAM 3D Body does by itself), sam_hands (False: SAM 3D Body's body decoder
+        only, without its two extra passes over hand crops; about a third of the time, coarser fingers),
+        sam_bgr (True: hand SAM 3D Body the BGR frame as the studio did before; it expects RGB).
+        """
         torch = self.torch
         from PIL import Image
 
@@ -156,6 +177,9 @@ class Engine:
         cuts = sorted(int(c) for c in req.get("cuts", []) if 0 < int(c) < n)
         shot_of = np.searchsorted(np.array(cuts, int), np.arange(max(n, 1)), side="right")
         max_people, min_area = int(req.get("max_people", 2)), float(req.get("min_area", 0.03))
+        fov_samples, bgr = int(req.get("fov_samples", 0)), bool(req.get("sam_bgr", False))
+        sam_kw = {} if req.get("sam_hands", True) else {"inference_type": "body"}
+        shot_K = self._shot_intrinsics(req["video"], shot_of, fov_samples, bgr, emit) if fov_samples > 0 else None
 
         # ---- pass 1: track + estimate ----
         tracks, active, masks = [], [], []
@@ -192,13 +216,16 @@ class Engine:
                 if (b[2] - b[0]) * (b[3] - b[1]) / (W * H) < min_area or any(iou(b, a[1]) > 0.5 for a in assign):
                     continue
                 tracks.append({"shot": int(shot_of[i]), "frames": [], "box": [], "M": [], "cam_t": [], "focal": [],
-                               "wrist": [], **{k: [] for k in PARAM_KEYS}})
+                               "wrist": [], "kp": [], "kp_score": [], **{k: [] for k in PARAM_KEYS}})
                 assign.append((len(tracks) - 1, b))
                 used.add(j)
             active = assign
             if assign:
                 bx = np.stack([b for _, b in assign])
-                outs = self.est.process_one_image(fr, bboxes=bx)
+                if shot_K is not None:
+                    sam_kw["cam_int"] = shot_K[int(shot_of[i])]
+                outs = self.est.process_one_image(fr if bgr else cv2.cvtColor(fr, cv2.COLOR_BGR2RGB), bboxes=bx,
+                                                  **sam_kw)
                 coco = [[float(b[0]), float(b[1]), float(b[2] - b[0]), float(b[3] - b[1])] for b in bx]
                 with torch.no_grad():
                     pin = self.vp_proc(img, boxes=[coco], return_tensors="pt").to(DEV)
@@ -216,6 +243,8 @@ class Engine:
                     tr["focal"].append(float(o["focal_length"]))
                     sc = pose["scores"].cpu().numpy()
                     tr["wrist"].append({s: float(sc[WRIST[s]]) for s in "lr"})
+                    tr["kp"].append(pose["keypoints"].cpu().numpy().astype(np.float32))
+                    tr["kp_score"].append(sc.astype(np.float32))
                     for k in PARAM_KEYS:
                         tr[k].append(params[k][0])
             i += 1
@@ -228,12 +257,51 @@ class Engine:
         shot_of = shot_of[:n]
         tracks = [t for t in tracks if len(t["frames"]) >= 3]
         for t in tracks:
-            for k in PARAM_KEYS + ["M", "cam_t", "focal", "box"]:
+            for k in PARAM_KEYS + ["M", "cam_t", "focal", "box", "kp", "kp_score"]:
                 t[k] = np.stack(t[k]) if k != "focal" else np.array(t[k], np.float32)
             t["frames"] = np.array(t["frames"])
+        return {"tracks": tracks, "masks": masks, "shot_of": shot_of, "W": W, "H": H, "n": n}
 
-        # ---- pass 2: meshes ----
-        emit(0.76, "클레이 메시 생성")
+    def _shot_intrinsics(self, video, shot_of, k, bgr, emit):
+        """One camera matrix per shot: MoGe-2 on k frames spread over the shot, element-wise median."""
+        torch = self.torch
+        n = len(shot_of)
+        want = {}
+        for s in np.unique(shot_of):
+            idx = np.where(shot_of == s)[0]
+            for f in np.unique(np.linspace(idx[0], idx[-1], min(k, len(idx))).round().astype(int)):
+                want[int(f)] = int(s)
+        cap = cv2.VideoCapture(video)
+        Ks = {}
+        for f in range(n):
+            ok, fr = cap.read()
+            if not ok:
+                break
+            if f in want:
+                img = fr if bgr else cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+                with torch.no_grad():
+                    K = self.est.fov_estimator.get_cam_intrinsics(img)
+                Ks.setdefault(want[f], []).append(np.asarray(torch.as_tensor(K).cpu(), np.float32).reshape(3, 3))
+        cap.release()
+        emit(0.02, "화각 추정")
+        return {s: torch.as_tensor(np.median(np.stack(v), 0)[None]) for s, v in Ks.items()}
+
+    def build(self, est, req, keypoints=False):
+        """Pass 2: clay meshes in camera space, per frame [(vertices, face mask)], and one focal per frame.
+
+        req options: mode (head | neutral), smooth (Gaussian sigma in frames over the vertices),
+        keep_size (place the median-shape body along its ray so its on-screen size matches SAM's per-frame
+        body: swapping in the median body at SAM's per-frame depth makes the figure grow and shrink),
+        z_smooth (extra Gaussian sigma on the body's depth only, moved along its ray),
+        depth_guide (Gaussian sigma; 0 = off; needs req["bg"], a depth video of the clip, bigger = nearer
+        unless bg_invert):
+        per track, the person's median depth value is fitted to SAM's 1/z (1/z = a*d + b) and the body is
+        moved along its ray to the fitted depth. Video depth is steady over time where SAM's depth wobbles
+        with the pose (an arm reaching out pushes the body back and forth).
+        keypoints=True adds the 70 MHR keypoints after the same moves: [(vertices, face mask, keypoints)].
+        """
+        tracks, masks, shot_of = est["tracks"], est["masks"], est["shot_of"]
+        W, H, n = est["W"], est["H"], est["n"]
         focal = np.zeros(n, np.float32)
         acc = [[] for _ in range(n)]
         for t in tracks:
@@ -243,29 +311,108 @@ class Engine:
             vals = [v for f in np.where(shot_of == s)[0] for v in acc[f]]
             focal[shot_of == s] = np.median(vals) if vals else 1.2 * W
         mode, sigma = req.get("mode", "head"), float(req.get("smooth", 2.0))
+        keep_size, z_sigma = bool(req.get("keep_size", False)), float(req.get("z_smooth", 0.0))
+        guide_sigma = float(req.get("depth_guide", 0.0))
+        depth = self._depth_small(req["bg"], masks) if guide_sigma > 0 and req.get("bg") else None
+        nv = self.head_w.shape[1]
         per_frame = [[] for _ in range(n)]
         for t in tracks:
+            def place(v, t=t):  # model space -> camera space: SAM's per-frame affine map, then its translation
+                h = np.concatenate([v, np.ones(v.shape[:2] + (1,), np.float32)], 2)
+                return np.einsum("fvk,fkj->fvj", h, t["M"]) + t["cam_t"][:, None, :]
+
             v_neu = self._mhr(t, shape="zero", scale="median")
-            if mode == "head":
-                v_body = self._mhr(t, shape="median", scale="median")
-                v_out = v_body * (1 - self.head_w) + v_neu * self.head_w
+            need_kp = keypoints or depth is not None
+            if mode == "head" or need_kp:
+                v_body, kp = self._mhr(t, shape="median", scale="median", keypoints=True)
+                v_out = v_body * (1 - self.head_w) + v_neu * self.head_w if mode == "head" else v_neu
                 del v_body
             else:
                 v_out = v_neu
-            P = np.einsum("fvk,fkj->fvj", np.concatenate([v_out, np.ones(v_out.shape[:2] + (1,), np.float32)], 2), t["M"])
-            P += t["cam_t"][:, None, :]
+            if need_kp:
+                v_out = np.concatenate([v_out, kp], 1)
+            P = place(v_out)
             del v_out, v_neu
+            if keep_size:
+                Pp = place(self._mhr(t))
+                c_out, c_pred = P[:, :nv].mean(1), Pp.mean(1)
+                l_out = np.sqrt(((P[:, :nv] - c_out[:, None]) ** 2).sum(-1).mean(1))
+                l_pred = np.sqrt(((Pp - c_pred[:, None]) ** 2).sum(-1).mean(1))
+                del Pp
+                P += (c_out * (l_out / l_pred - 1)[:, None])[:, None, :]
             for k, f in enumerate(t["frames"]):  # re-seat along z so on-screen size is kept under the shot focal
-                cz = P[k, :, 2].mean()
+                cz = P[k, :nv, 2].mean()
                 P[k, :, 2] += cz * (focal[f] / t["focal"][k] - 1)
+            if z_sigma > 0:
+                c = P[:, :nv].mean(1)
+                cz = gaussian_smooth(c[:, 2], t["frames"], z_sigma)
+                P += (c * (cz / c[:, 2] - 1)[:, None])[:, None, :]
+            if depth is not None:
+                self._guide_depth(t, P, nv, depth, masks, guide_sigma, -1.0 if req.get("bg_invert") else 1.0)
             P = gaussian_smooth(P, t["frames"], sigma)
-            fmask = self._hidden_hands(t, P, masks, focal, W, H, shot_of)
+            fmask = self._hidden_hands(t, P[:, :nv], masks, focal, W, H, shot_of)
             for k, f in enumerate(t["frames"]):
-                per_frame[f].append((P[k], fmask[k]))
+                per_frame[f].append((P[k, :nv], fmask[k]) + ((P[k, nv:],) if keypoints else ()))
+        return per_frame, focal
 
-        # ---- pass 3: render ----
-        self._render(req, per_frame, focal, masks, W, H, n, emit)
-        return {"ok": True, "people": len(tracks), "frames": n}
+    @staticmethod
+    def _depth_small(path, masks):
+        """Depth video frames as grey arrays at the person-mask size (1/MASK_DOWN)."""
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            raise RuntimeError("depth 영상을 열지 못했습니다.")
+        out = []
+        for m in masks:
+            ok, d = cap.read()
+            if not ok:
+                break
+            out.append(cv2.resize(cv2.cvtColor(d, cv2.COLOR_BGR2GRAY), (m.shape[1], m.shape[0]),
+                                  interpolation=cv2.INTER_AREA).astype(np.float32))
+        cap.release()
+        return out
+
+    @staticmethod
+    def _guide_depth(t, P, nv, depth, masks, sigma, sign):
+        """In place: move each frame's body along its ray to the depth the video depth implies."""
+        kernel = np.ones((5, 5), np.uint8)
+        g = np.full(len(P), np.nan)
+        for k, f in enumerate(t["frames"]):
+            if f >= len(depth):
+                continue
+            m = masks[f]
+            x0, y0, x1, y1 = np.clip((t["box"][k] / MASK_DOWN).astype(int), 0, None)
+            inside = np.zeros_like(m, np.uint8)
+            inside[y0:y1, x0:x1] = m[y0:y1, x0:x1]
+            inside = cv2.erode(inside, kernel) > 0
+            vals = depth[f][inside]
+            # skip frames where the person sits at the ends of the grey range: no depth change shows there
+            if len(vals) >= 20 and ((vals >= 250) | (vals <= 5)).mean() < 0.05:
+                g[k] = np.median(vals)
+        ok = np.isfinite(g)
+        if ok.sum() < 8:
+            return
+        g = gaussian_smooth(np.interp(np.arange(len(P)), np.where(ok)[0], g[ok]), t["frames"], sigma)
+        # anchor: the joints ViTPose sees. Moving along the ray through them keeps the visible part in place;
+        # through the body centre (off screen in a close-up) the visible head would slide up and down
+        kp = P[:, nv:][:, MHR2COCO]
+        vis = t["kp_score"] > 0.5
+        c = np.stack([kp[k, vis[k]].mean(0) if vis[k].any() else P[k, :nv].mean(0) for k in range(len(P))])
+        iz = 1 / c[:, 2]
+        if np.ptp(g[ok]) < 2:  # the video sees no depth change
+            lz_v = np.zeros(len(P))
+        else:
+            a, b = np.polyfit(g[ok], iz[ok], 1)
+            if sign * a <= 0 or sign * np.corrcoef(g[ok], iz[ok])[0, 1] < 0.5:
+                return  # video depth and SAM disagree on the direction of motion: leave SAM's depth
+            lz_v = -np.log(np.maximum(a * g + b, 1e-3))
+        # the video depth replaces only SAM's faster depth changes; slower trends stay SAM's, since the fit is
+        # a straight line and the true relation bends over a long push-in
+        lz_s = np.log(c[:, 2])
+        trend = lambda x: gaussian_smooth(x, t["frames"], GUIDE_TREND)  # noqa: E731
+        w = gaussian_smooth(ok.astype(np.float64), t["frames"], 3)  # fade back to SAM where the video can't see
+        w = np.where(ok, w, 0.0)
+        r = np.exp(w * ((lz_v - trend(lz_v)) - (lz_s - trend(lz_s))))
+        P += (c * (r - 1)[:, None])[:, None, :]
 
     def _hidden_hands(self, t, P, masks, focal, W, H, shot_of):
         """Per frame face mask: drop a forearm + hand the source doesn't show (majority over +-3 frames)."""
@@ -298,7 +445,9 @@ class Engine:
             out.append(fm)
         return out
 
-    def _render(self, req, per_frame, focal, masks, W, H, n, emit):
+    def clay_frames(self, per_frame, focal, W, H, clear=(0.0, 0.0, 0.0, 0.0)):
+        """Yields one (H, W, 4) uint8 clay render per frame. With the default clear the colour is
+        premultiplied by alpha, ready to lay over a background."""
         import moderngl
 
         if self.ctx is None:
@@ -329,27 +478,12 @@ class Engine:
         fbo_ms = ctx.framebuffer(ctx.renderbuffer((W, H), 4, samples=4), ctx.depth_renderbuffer((W, H), samples=4))
         fbo = ctx.framebuffer(ctx.renderbuffer((W, H), 4))
         ctx.enable(moderngl.DEPTH_TEST)
-
-        bg_path, bg_mode = req.get("bg"), req.get("bg_mode", "overlay")
-        dcap = cv2.VideoCapture(bg_path) if bg_path else None
-        if dcap is not None and not dcap.isOpened():
-            raise RuntimeError("depth 영상을 열지 못했습니다.")
-        k_rm = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(0.03 * W) | 1,) * 2)
-        writer = subprocess.Popen(
-            [req.get("ffmpeg", "ffmpeg"), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}",
-             "-r", str(req.get("fps", "24")), "-i", "-", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
-             "-movflags", "+faststart", req["out"]],
-            stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        last_d = np.full((H, W), 40, np.uint8)
         try:
-            for i in range(n):
+            for i in range(len(per_frame)):
                 fbo_ms.use()
-                if dcap is None:
-                    ctx.clear(40 / 255, 40 / 255, 40 / 255, 1.0, depth=1.0)
-                else:
-                    ctx.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)  # premultiplied over the depth
+                ctx.clear(*clear, depth=1.0)
                 prog["focal"].value = float(focal[i])
-                for P, fmask in per_frame[i]:
+                for P, fmask, *_ in per_frame[i]:
                     if not np.isfinite(P).all() or (P[:, 2] < 0.05).any():
                         continue
                     tri = P[faces]
@@ -364,7 +498,26 @@ class Engine:
                     vao.render(moderngl.TRIANGLES)
                     vao.release(); vbo.release(); ibo.release()
                 ctx.copy_framebuffer(fbo, fbo_ms)
-                rgba = np.frombuffer(fbo.read(components=4), np.uint8).reshape(H, W, 4)[::-1]
+                yield np.frombuffer(fbo.read(components=4), np.uint8).reshape(H, W, 4)[::-1]
+        finally:
+            fbo_ms.release()
+            fbo.release()
+
+    def _render(self, req, per_frame, focal, masks, W, H, n, emit):
+        bg_path, bg_mode = req.get("bg"), req.get("bg_mode", "overlay")
+        dcap = cv2.VideoCapture(bg_path) if bg_path else None
+        if dcap is not None and not dcap.isOpened():
+            raise RuntimeError("depth 영상을 열지 못했습니다.")
+        k_rm = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(0.03 * W) | 1,) * 2)
+        writer = subprocess.Popen(
+            [req.get("ffmpeg", "ffmpeg"), "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}",
+             "-r", str(req.get("fps", "24")), "-i", "-", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", req["out"]],
+            stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        last_d = np.full((H, W), 40, np.uint8)
+        clear = (40 / 255, 40 / 255, 40 / 255, 1.0) if dcap is None else (0.0, 0.0, 0.0, 0.0)
+        try:
+            for i, rgba in enumerate(self.clay_frames(per_frame[:n], focal, W, H, clear)):
                 clay = rgba[..., :3].astype(np.float32)
                 if dcap is None:
                     out = clay
@@ -390,8 +543,6 @@ class Engine:
             writer.kill()
             raise
         finally:
-            fbo_ms.release()
-            fbo.release()
             if dcap is not None:
                 dcap.release()
 

@@ -289,6 +289,7 @@ class ClayRequest(BaseModel):
     mode: str = "head"  # head: body shape kept, head neutral | neutral: everything neutral
     smooth: float = Field(2.0, ge=0, le=6)  # temporal Gaussian sigma in frames
     max_people: int = Field(2, ge=1, le=4)
+    hands: str = "full"  # full: SAM 3D Body's extra hand passes | fast: body decoder only, about 3x faster
     bg: str = "auto"  # none | auto (depth generated in the same job) | upload (depth_media_id)
     bg_mode: str = "overlay"  # overlay | remove (people filled out of the depth first)
     depth_media_id: str | None = None
@@ -302,7 +303,8 @@ def create_clay_job(req: ClayRequest):
     st = clay.status()
     if not st["available"]:
         raise HTTPException(409, st["reason"])
-    if req.mode not in clay.MODES or req.bg not in clay.BACKGROUNDS or req.bg_mode not in clay.BG_MODES:
+    if (req.mode not in clay.MODES or req.bg not in clay.BACKGROUNDS or req.bg_mode not in clay.BG_MODES
+            or req.hands not in clay.HANDS):
         raise HTTPException(400, "설정 값이 올바르지 않습니다.")
     if media.frames > config.CLAY_MAX_FRAMES:
         raise HTTPException(400, f"영상이 너무 깁니다 ({media.frames}프레임, 최대 {config.CLAY_MAX_FRAMES}프레임).")

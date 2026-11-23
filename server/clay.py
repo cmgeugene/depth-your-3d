@@ -26,6 +26,7 @@ STEP_TIMEOUT = 300  # longest silence between progress lines once loaded
 MODES = {"head": "체형 유지 · 얼굴 중립", "neutral": "체형 · 얼굴 모두 중립"}
 BACKGROUNDS = {"none": "클레이", "auto": "Depth + 클레이", "upload": "업로드 depth + 클레이"}
 BG_MODES = {"overlay": "depth 위에 얹기", "remove": "사람 지우고 얹기"}
+HANDS = {"full": "손 정확하게", "fast": "손 단순 (빠르게)"}
 
 _lock = threading.Lock()  # one job at a time talks to the worker
 _proc: subprocess.Popen | None = None
@@ -52,7 +53,8 @@ def summary(media, p: dict) -> dict:
     model = "SAM 3D Body"
     if p["bg"] == "auto":
         model = f"{config.MODELS[p['depth']['model']]['label']} + {model}"
-    outs = [BACKGROUNDS[p["bg"]]] + ([BG_MODES[p["bg_mode"]]] if p["bg"] != "none" else []) + [MODES[p["mode"]]]
+    outs = ([BACKGROUNDS[p["bg"]]] + ([BG_MODES[p["bg_mode"]]] if p["bg"] != "none" else []) + [MODES[p["mode"]]]
+            + [HANDS[p.get("hands", "full")]])
     return {
         "resolution": f"{media.width}×{media.height}",
         "frames": media.frames,
@@ -138,7 +140,13 @@ def run(job, media, progress) -> list[dict]:
     name = f"{media.stem}{suffix}.mp4"
     req = {"video": str(media.src), "out": str(job.dir / name), "frames": media.frames, "fps": media.fps_str,
            "cuts": p["cuts"], "mode": p["mode"], "smooth": p["smooth"], "max_people": p["max_people"],
-           "bg": depth_path, "bg_mode": p["bg_mode"], "ffmpeg": config.FFMPEG}
+           "bg": depth_path, "bg_mode": p["bg_mode"], "ffmpeg": config.FFMPEG,
+           # over a depth video, its steady person depth replaces SAM's pose-driven depth wobble; not with
+           # per-frame normalization, whose brightness scale moves from frame to frame
+           "depth_guide": config.CLAY_DEPTH_GUIDE if depth_path and not (
+               p["bg"] == "auto" and p["depth"].get("norm") in ("frame", "adaptive")) else 0,
+           "bg_invert": p["bg"] == "auto" and bool(p["depth"].get("invert")),
+           "fov_samples": config.CLAY_FOV_SAMPLES, "sam_hands": p.get("hands", "full") == "full"}
     a, b = span
     with _lock:
         _busy = True

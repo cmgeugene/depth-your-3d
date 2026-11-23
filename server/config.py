@@ -60,6 +60,12 @@ CLAY_PYTHON = os.environ.get("DS_CLAY_PYTHON", "")
 CLAY_REPO = os.environ.get("DS_CLAY_REPO", "")
 CLAY_CHECKPOINT = os.environ.get("DS_CLAY_CHECKPOINT", "")  # empty: facebook/sam-3d-body-dinov3 (gated)
 CLAY_IDLE_SEC = float(os.environ.get("DS_CLAY_IDLE_SEC", "300"))
+# Clay over a depth video: Gaussian sigma (frames) of the depth video's person depth that steadies the
+# figures' depth (0 = off, SAM's depth only).
+CLAY_DEPTH_GUIDE = float(os.environ.get("DS_CLAY_DEPTH_GUIDE", "4"))
+# MoGe-2 field of view from this many frames per shot (0 = every frame). Only the shot median is used,
+# and running it on every frame took 20-30 % of a clay job.
+CLAY_FOV_SAMPLES = int(os.environ.get("DS_CLAY_FOV_SAMPLES", "5"))
 CLAY_MAX_FRAMES = int(os.environ.get("DS_CLAY_MAX_FRAMES", "3000"))  # meshes of every frame are held in RAM
 
 FFMPEG = os.environ.get("DS_FFMPEG", "ffmpeg")

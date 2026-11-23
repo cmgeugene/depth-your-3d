@@ -4,7 +4,11 @@ import {
 } from "./common.js";
 
 // kind: depth | clay | depth_clay. Clay settings apply to the two clay kinds.
-const DEFAULTS = { kind: "depth", mode: "head", smooth: 2, bg_mode: "overlay", max_people: 2 };
+const DEFAULTS = { kind: "depth", mode: "head", smooth: 2, bg_mode: "overlay", max_people: 2, hands: "full" };
+const HANDS_NOTE = {
+  full: "손을 따로 확대해 한 번 더 추정함. 물건을 쥔 손가락까지 맞음.",
+  fast: "몸만 추정해 약 3배 빠름. 손은 반쯤 벌린 모양이 되어 쥔 모양이 약해짐.",
+};
 const KIND_NOTE = {
   depth: "실사 영상을 흑백 depth로 바꿈. 공간 · 실루엣 · 카메라가 넘어감.",
   clay: "인물을 회색 클레이 마네킹으로 바꿈 (SAM 3D Body). 몸 동작 · 고개 각도 · 카메라만 넘기고 배우 얼굴형은 넘기지 않음. 배경은 비어 있음.",
@@ -60,6 +64,7 @@ function sync() {
   for (const e of document.querySelectorAll(".k-only-depth")) e.hidden = k !== "depth";
   $("#maxPeople").value = String(opts.max_people);
   $("#kindNote").textContent = KIND_NOTE[k];
+  $("#handsNote").textContent = HANDS_NOTE[opts.hands] || "";
   const tooLong = media && k !== "depth" && media.frames > status.clay.max_frames;
   $("#startBtn").disabled = !!tooLong;
   $("#startNote").textContent = tooLong ? `클레이는 ${status.clay.max_frames}프레임까지 가능합니다.`
@@ -123,7 +128,7 @@ async function start() {
   } else {
     path = "/api/clay-jobs";
     body = {
-      media_id: media.id, mode: opts.mode, smooth: +opts.smooth, max_people: +opts.max_people,
+      media_id: media.id, mode: opts.mode, smooth: +opts.smooth, max_people: +opts.max_people, hands: opts.hands,
       bg: opts.kind === "depth_clay" ? "auto" : "none", bg_mode: opts.bg_mode, depth: depthForm.get(), cuts: cuts(),
     };
   }
