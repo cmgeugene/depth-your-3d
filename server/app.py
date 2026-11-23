@@ -217,6 +217,7 @@ class UpscaleRequest(BaseModel):
     format: str = "mp4_h265"
     quality: str = "balanced"
     interpolation: bool = False
+    color_keep: bool = True  # pull Real-ESRGAN's tone/colour shift back to the source
     audio: bool = True  # keep the source audio and subtitle tracks
 
 
@@ -342,7 +343,8 @@ def _create_image_upscale_job(req: UpscaleRequest):
         side = max(m.width, m.height) * req.scale
         if side > config.UPSCALE_MAX_SIDE:
             raise HTTPException(400, f"{m.name}: 출력이 너무 큽니다 (긴 변 {side}px, 최대 {config.UPSCALE_MAX_SIDE}px). 배율을 낮추세요.")
-    p = req.model_dump(include={"scale", "mode", "backend", "denoise", "image_format", "image_quality"})
+    p = req.model_dump(include={"scale", "mode", "backend", "denoise", "image_format", "image_quality",
+                                 "color_keep"})
     p.update(image=True, media_ids=[m.id for m in images],
              images=[{"src": str(m.src), "name": m.name} for m in images])
     job = registry.submit(images[0], {"kind": "upscale", "upscale": p})

@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from dataclasses import asdict, dataclass
 from fractions import Fraction
@@ -75,6 +76,7 @@ class UpscaleSettings:
     hardware_encode: bool = True
     keep_cache: bool = True
     tile_size: int = 0
+    color_keep: bool = False
 
 
 @dataclass
@@ -101,6 +103,7 @@ class ImageUpscaleSettings:
     quality: int = 92
     overwrite: bool = False
     tile_size: int = 0
+    color_keep: bool = False
 
 
 @dataclass
@@ -309,6 +312,51 @@ def probe_image(path: str, ffprobe: str | None = None) -> ImageInfo:
     )
 
 
+COLOR_KEEP_SIGMA = 3.0
+
+
+def restore_source_color(source: Path, upscaled: Path, sigma: float = COLOR_KEEP_SIGMA) -> None:
+    """Pull the upscaled image's tone and colour back to the source, in place.
+
+    Real-ESRGAN brightens mid/high tones by a few levels and lifts green the most.
+    The low-frequency difference between the source and the downscaled result is
+    measured at source resolution, blurred so line work and texture are left alone,
+    then upsampled and added back. Only colour channels are touched; alpha is kept.
+    """
+    import cv2
+    import numpy as np
+
+    def read(path: Path):
+        image = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise PipelineError(f"색 유지 보정용 이미지를 읽지 못했습니다: {path.name}")
+        return image
+
+    src, out = read(source), read(upscaled)
+    if src.ndim == 2:
+        src = src[..., None]
+    if out.ndim == 2:
+        out = out[..., None]
+    channels = min(src.shape[2], out.shape[2], 3)
+    peak = float(np.iinfo(out.dtype).max) if out.dtype.kind in "ui" else 1.0
+    src_scale = peak / (float(np.iinfo(src.dtype).max) if src.dtype.kind in "ui" else 1.0)
+    height, width = src.shape[:2]
+
+    s = src[..., :channels].astype(np.float32) * src_scale
+    o = out[..., :channels].astype(np.float32)
+    down = cv2.resize(o, (width, height), interpolation=cv2.INTER_AREA).reshape(height, width, channels)
+    delta = cv2.GaussianBlur(s, (0, 0), sigma) - cv2.GaussianBlur(down, (0, 0), sigma)
+    delta = cv2.resize(delta, (out.shape[1], out.shape[0]), interpolation=cv2.INTER_CUBIC)
+    fixed = out.copy()
+    fixed[..., :channels] = np.clip(o + delta.reshape(o.shape), 0, peak).round().astype(out.dtype)
+    if fixed.shape[2] == 1:
+        fixed = fixed[..., 0]
+    ok, encoded = cv2.imencode(upscaled.suffix or ".png", fixed)
+    if not ok:
+        raise PipelineError(f"색 유지 보정 결과를 저장하지 못했습니다: {upscaled.name}")
+    encoded.tofile(str(upscaled))
+
+
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, remainder = divmod(seconds, 3600)
@@ -359,6 +407,7 @@ class VideoUpscalePipeline:
             "mode": self.settings.content_mode,
             "denoise": self.settings.denoise,
             "backend": self.settings.backend,
+            "color_keep": self.settings.color_keep and self.settings.backend == "ai",
         }
         digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         # Several ncnn Windows builds cannot open paths containing Korean or
@@ -659,6 +708,12 @@ class VideoUpscalePipeline:
                     if not resized.is_file():
                         raise PipelineError(f"안전 모드 축소 프레임이 누락되었습니다: {resized.name}")
                     os.replace(resized, self.upscaled_frames / source.name)
+            if self.settings.color_keep:
+                self._check_cancelled()
+                # OpenCV releases the GIL, so frames correct in parallel (mostly PNG writes).
+                workers = max(1, min(8, (os.cpu_count() or 4) // 2))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    list(pool.map(lambda s: restore_source_color(s, self.upscaled_frames / s.name), batch))
             done = completed + min(offset + len(batch), len(missing))
             self.progress(0.15 + (done / max(1, total)) * 0.57, f"AI 업스케일 {done:,}/{total:,}")
             self.log(f"AI 업스케일: {done:,}/{total:,}프레임")
@@ -909,6 +964,15 @@ class ImageUpscalePipeline:
                 self.log(f"알파 보존: {source.name}의 노이즈 제거를 생략합니다.")
         elif denoise:
             filters.append(denoise)
+        if source.suffix.lower() == ".webp":
+            # FFmpeg's WebP decoder can land a level or two darker than libwebp on some
+            # lossy files; decode with Pillow (libwebp) so the tones match the source.
+            from PIL import Image
+
+            decoded = target.with_name("decoded.png")
+            with Image.open(source) as image:
+                image.convert("RGBA" if info.has_alpha else "RGB").save(decoded)
+            source = decoded
         command = [self.ffmpeg, "-hide_banner", "-y", "-i", str(source), "-frames:v", "1"]
         if filters:
             command.extend(["-vf", ",".join(filters)])
@@ -940,13 +1004,25 @@ class ImageUpscalePipeline:
             return result
 
         assert self.realesrgan
+        from PIL import Image
+
+        # realesr-animevideov3 returns an all-zero image (colour and alpha) for RGBA
+        # input, so the model only ever sees RGB; alpha is enlarged separately.
+        alpha = None
+        ai_input = normalized
+        with Image.open(normalized) as image:
+            if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
+                rgba = image.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                ai_input = stage / "input_rgb.png"
+                rgba.convert("RGB").save(ai_input)
         safe_real_2x = self.settings.content_mode == "real" and self.settings.scale == 2
         ai_result = stage / "ai_native.png"
         ai_scale = 4 if safe_real_2x else self.settings.scale
         command = [
             self.realesrgan,
             "-i",
-            str(normalized),
+            str(ai_input),
             "-o",
             str(ai_result),
             "-n",
@@ -982,6 +1058,13 @@ class ImageUpscalePipeline:
             )
         else:
             shutil.copy2(ai_result, result)
+        if self.settings.color_keep:
+            restore_source_color(normalized, result)
+        if alpha is not None:
+            with Image.open(result) as upscaled:
+                merged = upscaled.convert("RGB")
+                merged.putalpha(alpha.resize(merged.size, Image.LANCZOS))
+            merged.save(result)
         return result
 
     def _write_output(self, source: Path, target: Path, info: ImageInfo) -> None:

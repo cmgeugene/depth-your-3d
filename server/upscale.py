@@ -43,6 +43,10 @@ def model_name(p: dict) -> str:
     return "realesr-animevideov3" if p["mode"] == "anime" else "realesrgan-x4plus"
 
 
+def _color_tag(p: dict) -> list[str]:
+    return ["원본 색 유지"] if p.get("color_keep") and p["backend"] == "ai" else []
+
+
 def summary(media, p: dict) -> dict:
     if p.get("image"):
         n = len(p["images"])
@@ -53,7 +57,7 @@ def summary(media, p: dict) -> dict:
             "drawings": n,
             "images": n,
             "model": model_name(p),
-            "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]], IMAGE_FORMATS[p["image_format"]]],
+            "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]] + _color_tag(p) + [IMAGE_FORMATS[p["image_format"]]],
         }
     fps = media.fps * (2 if p["interpolation"] else 1)
     return {
@@ -61,7 +65,7 @@ def summary(media, p: dict) -> dict:
         "frames": media.frames,
         "drawings": media.frames,
         "model": model_name(p),
-        "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]]
+        "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]] + _color_tag(p)
                    + ([f"RIFE {fps:g}fps"] if p["interpolation"] else [])
                    + [FORMATS[p["format"]][2]],
     }
@@ -117,6 +121,7 @@ def _run_images(job, p, progress) -> list[dict]:
         output_format=p["image_format"],
         quality=p["image_quality"],
         overwrite=True,
+        color_keep=p.get("color_keep", False),
     )
     label = IMAGE_FORMATS[p["image_format"]]
     try:
@@ -161,6 +166,7 @@ def run(job, media, progress) -> list[dict]:
         quality=p["quality"],
         hardware_encode=True,
         keep_cache=False,
+        color_keep=p.get("color_keep", False),
     )
     with open(job.dir / "upscale.log", "a", encoding="utf-8") as log:
         pipe = _JobPipeline(settings, work, log=lambda m: log.write(m + "\n"), progress=progress,

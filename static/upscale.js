@@ -5,7 +5,7 @@ import {
 
 const DEFAULTS = {
   mode: "anime", scale: 2, backend: "ai", denoise: "none", format: "mp4_h265", quality: "balanced",
-  interpolation: false, image_format: "png", image_quality: 92,
+  interpolation: false, image_format: "png", image_quality: 92, color_keep: true,
 };
 const VIDEO_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|ts|mts)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|tiff?)$/i;
@@ -65,6 +65,8 @@ function sync() {
     }
   }
   $('.seg-ctrl[data-key="backend"] button[data-v="ai"]').disabled = !eng.realesrgan;
+  $("#colorKeep").checked = opts.color_keep;
+  $("#colorKeep").disabled = opts.backend !== "ai";
   $("#rife").checked = opts.interpolation;
   $("#rife").disabled = !eng.rife;
   $("#format").value = opts.format;
@@ -192,7 +194,8 @@ async function start() {
   try {
     const body = images.length
       ? { media_id: images[0].id, media_ids: images.map((m) => m.id), scale: opts.scale, mode: opts.mode,
-          backend: opts.backend, denoise: opts.denoise, image_format: opts.image_format, image_quality: opts.image_quality }
+          backend: opts.backend, denoise: opts.denoise, image_format: opts.image_format, image_quality: opts.image_quality,
+          color_keep: opts.color_keep }
       : { media_id: media.id, ...opts, audio: $("#outAudio").checked };
     const job = await postJSON("/api/upscale-jobs", body);
     recentJobs(job.id);
@@ -223,6 +226,7 @@ async function init() {
     });
   }
   $("#rife").addEventListener("change", (e) => { opts.interpolation = e.target.checked; sync(); });
+  $("#colorKeep").addEventListener("change", (e) => { opts.color_keep = e.target.checked; sync(); });
   $("#format").addEventListener("change", (e) => { opts.format = e.target.value; sync(); });
   $("#quality").addEventListener("change", (e) => { opts.quality = e.target.value; sync(); });
   $("#imgQuality").addEventListener("change", (e) => { opts.image_quality = +e.target.value; sync(); });
