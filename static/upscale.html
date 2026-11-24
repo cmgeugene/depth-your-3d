@@ -59,6 +59,7 @@
               <label id="lblDenoise">노이즈 제거</label>
               <div class="seg-ctrl" role="group" aria-labelledby="lblDenoise" data-key="denoise">
                 <button type="button" data-v="none">사용 안 함</button>
+                <button type="button" data-v="temporal" class="vid-only">시간축만</button>
                 <button type="button" data-v="low">약하게</button>
                 <button type="button" data-v="medium">보통</button>
                 <button type="button" data-v="high">강하게</button>
@@ -77,6 +78,7 @@
               </select>
               <label class="vid-only">추가 처리</label>
               <div class="stack vid-only" style="gap:6px">
+                <label class="check"><input type="checkbox" id="finish"> 마감 필터 · 업스케일 후 시간축 노이즈 제거 + 디밴딩, 10비트 H.265로 출력</label>
                 <label class="check"><input type="checkbox" id="rife"> RIFE 프레임 보간 (FPS 2배)</label>
                 <label class="check"><input type="checkbox" id="outAudio" checked> 원본 오디오 · 자막 유지</label>
               </div>

@@ -5,7 +5,7 @@ import {
 
 const DEFAULTS = {
   mode: "anime", scale: 2, backend: "ai", denoise: "none", format: "mp4_h265", quality: "balanced",
-  interpolation: false, image_format: "png", image_quality: 92, color_keep: true,
+  interpolation: false, image_format: "png", image_quality: 92, color_keep: true, finish: false,
 };
 const VIDEO_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|ts|mts)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|tiff?)$/i;
@@ -67,6 +67,10 @@ function sync() {
   $('.seg-ctrl[data-key="backend"] button[data-v="ai"]').disabled = !eng.realesrgan;
   $("#colorKeep").checked = opts.color_keep;
   $("#colorKeep").disabled = opts.backend !== "ai";
+  if (images.length && opts.denoise === "temporal") opts.denoise = "none"; // images have no neighbouring frames
+  if (opts.finish && opts.format === "mp4_h264") opts.format = "mp4_h265";
+  $("#format option[value=mp4_h264]").disabled = opts.finish;
+  $("#finish").checked = opts.finish;
   $("#rife").checked = opts.interpolation;
   $("#rife").disabled = !eng.rife;
   $("#format").value = opts.format;
@@ -99,6 +103,8 @@ function sync() {
     $("#outInfo").textContent = `출력 ${w}×${h} · ${+fps.toFixed(3)}fps · 모델 ${modelName()}`;
     tooBig = Math.max(w, h) > eng.max_side;
     if (tooBig) warns.push(`출력 긴 변이 서버 한도(${eng.max_side}px)를 넘습니다. 배율을 낮추세요.`);
+    if (opts.finish) warns.push("마감 필터는 CPU(libx265)로 인코딩해서 마지막 단계가 느립니다. 10비트 H.265는 일부 편집 프로그램에서 열리지 않을 수 있습니다.");
+    if (["low", "medium", "high"].includes(opts.denoise)) warns.push("약하게·보통·강하게는 공간 필터가 섞여 가는 선이 흐려질 수 있습니다. 2D 애니메이션은 시간축만을 권장합니다.");
   }
   if (opts.backend === "ai" && opts.mode === "real") warns.unshift("실사 모드는 2D 애니메이션에서 피부가 매끈해지고 선이 바뀔 수 있습니다.");
   $("#outWarn").hidden = !warns.length;
@@ -194,7 +200,7 @@ async function start() {
   try {
     const body = images.length
       ? { media_id: images[0].id, media_ids: images.map((m) => m.id), scale: opts.scale, mode: opts.mode,
-          backend: opts.backend, denoise: opts.denoise, image_format: opts.image_format, image_quality: opts.image_quality,
+          backend: opts.backend, denoise: opts.denoise === "temporal" ? "none" : opts.denoise, image_format: opts.image_format, image_quality: opts.image_quality,
           color_keep: opts.color_keep }
       : { media_id: media.id, ...opts, audio: $("#outAudio").checked };
     const job = await postJSON("/api/upscale-jobs", body);
@@ -226,6 +232,7 @@ async function init() {
     });
   }
   $("#rife").addEventListener("change", (e) => { opts.interpolation = e.target.checked; sync(); });
+  $("#finish").addEventListener("change", (e) => { opts.finish = e.target.checked; sync(); });
   $("#colorKeep").addEventListener("change", (e) => { opts.color_keep = e.target.checked; sync(); });
   $("#format").addEventListener("change", (e) => { opts.format = e.target.value; sync(); });
   $("#quality").addEventListener("change", (e) => { opts.quality = e.target.value; sync(); });

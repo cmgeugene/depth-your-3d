@@ -218,6 +218,7 @@ class UpscaleRequest(BaseModel):
     quality: str = "balanced"
     interpolation: bool = False
     color_keep: bool = True  # pull Real-ESRGAN's tone/colour shift back to the source
+    finish: bool = False  # video: temporal denoise + deband after upscaling, 10-bit H.265 output
     audio: bool = True  # keep the source audio and subtitle tracks
 
 
@@ -232,6 +233,8 @@ def create_upscale_job(req: UpscaleRequest):
     for key, allowed in choices:
         if getattr(req, key) not in allowed:
             raise HTTPException(400, f"{key} 값이 올바르지 않습니다.")
+    if req.finish and upscale.FORMATS[req.format][0] != "h265":
+        raise HTTPException(400, "마감 필터는 H.265 출력 형식에서만 쓸 수 있습니다.")
     engines = upscale.engines()
     if req.backend == "ai" and not engines["realesrgan"]:
         raise HTTPException(409, "서버에 Real-ESRGAN 엔진이 설치되지 않았습니다. 관리자에게 setup-upscale-engines.bat 실행을 요청하세요.")
@@ -335,7 +338,7 @@ def _create_image_upscale_job(req: UpscaleRequest):
         raise HTTPException(400, f"한 번에 {upscale.MAX_IMAGES}장까지 올릴 수 있습니다.")
     images = [_ready(_media(i), "image") for i in dict.fromkeys(ids)]
     choices = (("scale", upscale.SCALES), ("mode", upscale.MODES), ("backend", upscale.BACKENDS),
-               ("denoise", upscale.DENOISE), ("image_format", upscale.IMAGE_FORMATS))
+               ("denoise", upscale.IMAGE_DENOISE), ("image_format", upscale.IMAGE_FORMATS))
     for key, allowed in choices:
         if getattr(req, key) not in allowed:
             raise HTTPException(400, f"{key} 값이 올바르지 않습니다.")

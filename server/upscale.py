@@ -19,7 +19,10 @@ core.TOOLS_DIR = config.UPSCALE_ENGINES_DIR
 SCALES = (2, 4)
 MODES = ("anime", "real")
 BACKENDS = ("ai", "lanczos")
-DENOISE = ("none", "low", "medium", "high")
+DENOISE = ("none", "temporal", "low", "medium", "high")
+IMAGE_DENOISE = ("none", "low", "medium", "high")  # "temporal" needs neighbouring frames
+DENOISE_LABEL = {"temporal": "시간축 노이즈 제거", "low": "노이즈 제거 약", "medium": "노이즈 제거 중",
+                 "high": "노이즈 제거 강"}
 QUALITIES = ("high", "balanced", "small")
 # key -> (codec, extension, label)
 FORMATS = {
@@ -60,14 +63,16 @@ def summary(media, p: dict) -> dict:
             "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]] + _color_tag(p) + [IMAGE_FORMATS[p["image_format"]]],
         }
     fps = media.fps * (2 if p["interpolation"] else 1)
+    denoise = [DENOISE_LABEL[p["denoise"]]] if p["denoise"] in DENOISE_LABEL else []
     return {
         "resolution": f"{media.width}×{media.height} → {media.width * p['scale']}×{media.height * p['scale']}",
         "frames": media.frames,
         "drawings": media.frames,
         "model": model_name(p),
         "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]] + _color_tag(p)
-                   + ([f"RIFE {fps:g}fps"] if p["interpolation"] else [])
-                   + [FORMATS[p["format"]][2]],
+                   + denoise + ([f"RIFE {fps:g}fps"] if p["interpolation"] else [])
+                   + (["마감 필터"] if p.get("finish") else [])
+                   + [FORMATS[p["format"]][2] + (" 10bit" if p.get("finish") else "")],
     }
 
 
@@ -167,6 +172,7 @@ def run(job, media, progress) -> list[dict]:
         hardware_encode=True,
         keep_cache=False,
         color_keep=p.get("color_keep", False),
+        finish=p.get("finish", False),
     )
     with open(job.dir / "upscale.log", "a", encoding="utf-8") as log:
         pipe = _JobPipeline(settings, work, log=lambda m: log.write(m + "\n"), progress=progress,
