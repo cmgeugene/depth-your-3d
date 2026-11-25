@@ -368,7 +368,7 @@ function sync() {
   const mp = (media.width * media.height) / 1e6;
   const tooBig = mp > st.max_mp;
   $("#outInfo").textContent = `출력 ${media.width}×${media.height} PNG${media.has_alpha ? " (투명도 유지)" : ""} · ${st.model} · `
-    + `실제 ${opts.steps}스텝${st.offload ? " · VRAM 절약 모드(느림)" : ""}`;
+    + `실제 ${opts.steps}스텝${st.offload ? " · VRAM 절약 모드(느림)" : mp > st.tile_mp ? " · VAE 타일링" : ""}`;
   const warns = [];
   if (opts.denoise > 0.28) warns.push("0.28보다 높으면 선이나 얼굴이 바뀌기 쉽습니다.");
   if (tooBig) warns.push(`이미지가 서버 한도(${st.max_mp}MP)보다 큽니다.`);
@@ -496,7 +496,7 @@ async function init() {
   opts = { ...st.defaults, ...(store("ds-cleanup-opts") || {}) };
   for (const [k, [lo, hi]] of Object.entries(st.limits)) opts[k] = Math.min(hi, Math.max(lo, +opts[k] || st.defaults[k]));
   $("#ttl").textContent = status.ttl_hours;
-  $("#uploadHint").textContent = `png · jpg · webp — 최대 ${st.max_mp}MP (2048×2048 정도)`;
+  $("#uploadHint").textContent = `png · jpg · webp — 최대 ${st.max_mp}MP (가로×세로 픽셀 수)`;
   makeDropzone(dropzone, onFile, "image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp");
 
   syncSliders = [

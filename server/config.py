@@ -47,7 +47,11 @@ FLUX_OFFLOAD = os.environ.get("DS_FLUX_OFFLOAD", "auto")
 # Minutes without cleanup jobs before Flux leaves VRAM (0 keeps it loaded).
 FLUX_IDLE_MIN = float(os.environ.get("DS_FLUX_IDLE_MIN", "10"))
 FLUX_CACHE_DIR = DATA_DIR / "flux-prompts"  # cached T5/CLIP embeddings, a few MB per prompt
-CLEANUP_MAX_MP = float(os.environ.get("DS_CLEANUP_MAX_MP", "4.2"))  # largest image in megapixels (2048² ≈ 4.2)
+CLEANUP_MAX_MP = float(os.environ.get("DS_CLEANUP_MAX_MP", "12"))  # largest image in megapixels
+# Above this size the VAE encodes/decodes in 1024px tiles: at 6.3MP the whole-image VAE pass alone took
+# most of a 24GB card, tiled it peaks near 2.6GB. Tiles differ from the whole-image pass by ~0.6/255 on
+# average (PSNR ~50dB), well under the VAE round trip's own loss. Offload mode always tiles.
+CLEANUP_TILE_MP = float(os.environ.get("DS_CLEANUP_TILE_MP", "4.2"))
 # Auto-select on the cleanup page: SAM 3.1 in its own environment (it needs numpy<2), e.g. another
 # project's .venv. Empty paths turn the feature off. The worker exits after DS_SAM3_IDLE_SEC idle seconds.
 SAM3_PYTHON = os.environ.get("DS_SAM3_PYTHON", "")

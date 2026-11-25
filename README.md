@@ -110,7 +110,8 @@ uv pip install --python .venv\Scripts\python.exe pytorch-lightning pyrender open
 | `DS_UPSCALE_MAX_SIDE` | `8192` | 업스케일 출력의 최대 긴 변(px). 넘으면 작업을 받지 않습니다 |
 | `DS_FLUX_OFFLOAD` | `auto` | 얼룩 정리 Flux를 시스템 RAM에서 스트리밍할지. `auto`는 16GB 미만 GPU에서만 켬, `on`/`off`로 강제 |
 | `DS_FLUX_IDLE_MIN` | `10` | 정리 작업이 없을 때 Flux를 VRAM에서 내리기까지의 시간(분). `0`이면 계속 올려 둠 |
-| `DS_CLEANUP_MAX_MP` | `4.2` | 얼룩 정리 최대 이미지 크기(메가픽셀, 2048×2048 ≈ 4.2) |
+| `DS_CLEANUP_MAX_MP` | `12` | 얼룩 정리 최대 이미지 크기(메가픽셀, 가로×세로 픽셀 수) |
+| `DS_CLEANUP_TILE_MP` | `4.2` | 이보다 큰 이미지는 VAE를 1024px 타일로 나눠 처리함. 6.3MP 기준 VAE 피크 약 2.6GB, 통째로 처리한 결과와 차이 평균 0.6/255. VRAM 절약 모드에서는 항상 타일링 |
 | `DS_SAM3_PYTHON` / `DS_SAM3_CHECKPOINT` | (없음) | 자동 선택용 SAM 3.1 Python 실행 파일 / `sam3.1_multiplex.pt` 경로 |
 | `DS_SAM3_IDLE_SEC` | `120` | 자동 선택 요청이 없을 때 SAM 3.1 프로세스를 끝내기까지의 시간(초) |
 | `DS_CLAY_PYTHON` / `DS_CLAY_REPO` | (없음) | 클레이용 SAM 3D Body 환경의 Python 실행 파일 / 저장소 폴더 |

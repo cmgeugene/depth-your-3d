@@ -74,6 +74,7 @@ def status() -> dict:
         "model": "FLUX.1 [dev] · Nunchaku INT4",
         "offload": _offload(),
         "max_mp": config.CLEANUP_MAX_MP,
+        "tile_mp": config.CLEANUP_TILE_MP,
         "defaults": {**DEFAULTS, "prompt": DEFAULT_PROMPT},
         "limits": LIMITS,
     }
@@ -361,6 +362,10 @@ def run(job, media, progress) -> list[dict]:
             total_steps = max(p["steps"], round(p["steps"] / p["denoise"]))
             image16, mask16 = _pad16(rgb), _pad16(latent_mask)
             W, H = image16.size
+            # The pipeline is shared, so set tiling per job: whole-image VAE for normal sizes, tiles above
+            # DS_CLEANUP_TILE_MP (and always in offload mode, which loads with tiling on).
+            tiled = _offload() or W * H > config.CLEANUP_TILE_MP * 1e6
+            pipe.vae.enable_tiling() if tiled else pipe.vae.disable_tiling()
             embeds = {  # given embeddings are used as passed, so they must already be on the GPU
                 "prompt_embeds": pe.to("cuda", torch.bfloat16), "pooled_prompt_embeds": pooled.to("cuda", torch.bfloat16)}
             results = []
@@ -388,7 +393,7 @@ def run(job, media, progress) -> list[dict]:
                     out.putalpha(alpha)
                 results.append((seed, out))
             _last_used = time.time()
-            log(f"{p['count']}장 완료 ({time.time() - t0:.1f}초, {W}×{H}, 실제 {p['steps']}스텝 / 전체 {total_steps}) · {watch.report()}")
+            log(f"{p['count']}장 완료 ({time.time() - t0:.1f}초, {W}×{H}{', VAE 타일링' if tiled else ''}, 실제 {p['steps']}스텝 / 전체 {total_steps}) · {watch.report()}")
 
         progress(0.98, "저장 중")
         outputs = []
