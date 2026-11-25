@@ -90,6 +90,7 @@ class UpscaleSettings:
     tile_size: int = 0
     color_keep: bool = False
     finish: bool = False  # FINISH_FILTER + 10-bit HEVC (libx265); needs codec h265
+    detail_preserve: int = 0  # % of the Lanczos-scaled source mixed into the AI frames (ai backend only)
 
 
 @dataclass
@@ -421,6 +422,7 @@ class VideoUpscalePipeline:
             "denoise": self.settings.denoise,
             "backend": self.settings.backend,
             "color_keep": self.settings.color_keep and self.settings.backend == "ai",
+            "detail_preserve": self.settings.detail_preserve if self.settings.backend == "ai" else 0,
         }
         digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         # Several ncnn Windows builds cannot open paths containing Korean or
@@ -501,6 +503,8 @@ class VideoUpscalePipeline:
             raise PipelineError("입력 파일과 출력 파일은 같을 수 없습니다.")
         if self.settings.scale not in {2, 4}:
             raise PipelineError("확대 배율은 2배 또는 4배여야 합니다.")
+        if not 0 <= self.settings.detail_preserve <= 100:
+            raise PipelineError("원본 디테일 보존 비율은 0~100이어야 합니다.")
         if self.settings.finish and self.settings.codec != "h265":
             raise PipelineError("마감 필터는 H.265 출력에서만 쓸 수 있습니다.")
         if not self.ffmpeg or not self.ffprobe:
@@ -524,6 +528,8 @@ class VideoUpscalePipeline:
 
         self._extract_frames()
         self._upscale_frames()
+        if self.settings.detail_preserve and self.settings.backend == "ai":
+            self.upscaled_frames = self._preserve_details()
         final_frames = self.upscaled_frames
         final_fps = self.info.fps
         if self.settings.interpolation:
@@ -535,6 +541,56 @@ class VideoUpscalePipeline:
             shutil.rmtree(self.cache_dir, ignore_errors=True)
             self.log("임시 캐시를 정리했습니다.")
         return output
+
+    def _preserve_details(self) -> Path:
+        """Mix the Lanczos-scaled source into the AI frames so thin lines Real-ESRGAN smears keep their shape.
+
+        The source is decoded again without the pre-upscale denoise, so a high share also brings source noise
+        back. Both inputs are retimed to frame index (settb=1, setpts=N) so the blend pairs frame n with frame n
+        even for variable-frame-rate sources, matching the passthrough extraction.
+        """
+        assert self.info is not None
+        target = self.cache_dir / "frames_detail_preserved"
+        marker = target / ".complete"
+        expected = len(list(self.upscaled_frames.glob("*.png")))
+        if marker.exists() and len(list(target.glob("*.png"))) == expected:
+            self.log("원본 디테일 보존: 캐시 재사용")
+            return target
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True)
+        share = self.settings.detail_preserve
+        weight = share / 100
+        self.log(f"원본 디테일 보존: AI {100 - share}% + 원본 Lanczos {share}%")
+        width = self.info.width * self.settings.scale
+        height = self.info.height * self.settings.scale
+        command = [
+            self.ffmpeg, "-hide_banner", "-y",
+            "-framerate", f"{self.info.fps:.8f}", "-start_number", "1",
+            "-i", str(self.upscaled_frames / "%08d.png"),
+            "-i", self.settings.input_path,
+            "-filter_complex",
+            f"[0:v]settb=1,setpts=N,format=gbrp[ai];"
+            f"[1:v:0]settb=1,setpts=N,scale={width}:{height}:flags=lanczos,format=gbrp[orig];"
+            f"[ai][orig]blend=all_expr='A*{1 - weight:.4f}+B*{weight:.4f}':shortest=1,format=rgb24[out]",
+            "-map", "[out]", "-frames:v", str(expected),
+            "-fps_mode", "passthrough", "-start_number", "1",
+            str(target / "%08d.png"), "-progress", "pipe:1", "-nostats",
+        ]
+
+        def on_line(line: str) -> None:
+            if line.startswith("frame="):
+                try:
+                    done = int(line.split("=", 1)[1])
+                    self.progress(0.72, f"원본 디테일 보존 {done:,}/{expected:,}")
+                except ValueError:
+                    pass
+
+        self._run_process(command, line_callback=on_line)
+        if len(list(target.glob("*.png"))) != expected:
+            raise PipelineError("원본 디테일 보존 프레임 수가 예상과 다릅니다.")
+        marker.touch()
+        return target
 
     def _extract_frames(self) -> None:
         assert self.info is not None

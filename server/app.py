@@ -219,6 +219,7 @@ class UpscaleRequest(BaseModel):
     interpolation: bool = False
     color_keep: bool = True  # pull Real-ESRGAN's tone/colour shift back to the source
     finish: bool = False  # video: temporal denoise + deband after upscaling, 10-bit H.265 output
+    detail_preserve: int = 0  # video, ai backend: % of the Lanczos-scaled source mixed into the AI frames
     audio: bool = True  # keep the source audio and subtitle tracks
 
 
@@ -229,7 +230,8 @@ def create_upscale_job(req: UpscaleRequest):
         return _create_image_upscale_job(req)
     media = _ready(first, "video")
     choices = (("scale", upscale.SCALES), ("mode", upscale.MODES), ("backend", upscale.BACKENDS),
-               ("denoise", upscale.DENOISE), ("format", upscale.FORMATS), ("quality", upscale.QUALITIES))
+               ("denoise", upscale.DENOISE), ("format", upscale.FORMATS), ("quality", upscale.QUALITIES),
+               ("detail_preserve", upscale.DETAIL_PRESERVE))
     for key, allowed in choices:
         if getattr(req, key) not in allowed:
             raise HTTPException(400, f"{key} 값이 올바르지 않습니다.")

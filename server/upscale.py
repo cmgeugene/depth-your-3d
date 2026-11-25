@@ -24,6 +24,7 @@ IMAGE_DENOISE = ("none", "low", "medium", "high")  # "temporal" needs neighbouri
 DENOISE_LABEL = {"temporal": "시간축 노이즈 제거", "low": "노이즈 제거 약", "medium": "노이즈 제거 중",
                  "high": "노이즈 제거 강"}
 QUALITIES = ("high", "balanced", "small")
+DETAIL_PRESERVE = (0, 30, 50, 70)  # % of the Lanczos-scaled source mixed into the AI frames
 # key -> (codec, extension, label)
 FORMATS = {
     "mp4_h264": ("h264", ".mp4", "MP4 H.264"),
@@ -70,6 +71,7 @@ def summary(media, p: dict) -> dict:
         "drawings": media.frames,
         "model": model_name(p),
         "outputs": [f"{p['scale']}배", MODE_LABEL[p["mode"]]] + _color_tag(p)
+                   + ([f"원본 보존 {p['detail_preserve']}%"] if p.get("detail_preserve") and p["backend"] == "ai" else [])
                    + denoise + ([f"RIFE {fps:g}fps"] if p["interpolation"] else [])
                    + (["마감 필터"] if p.get("finish") else [])
                    + [FORMATS[p["format"]][2] + (" 10bit" if p.get("finish") else "")],
@@ -173,6 +175,7 @@ def run(job, media, progress) -> list[dict]:
         keep_cache=False,
         color_keep=p.get("color_keep", False),
         finish=p.get("finish", False),
+        detail_preserve=p.get("detail_preserve", 0),
     )
     with open(job.dir / "upscale.log", "a", encoding="utf-8") as log:
         pipe = _JobPipeline(settings, work, log=lambda m: log.write(m + "\n"), progress=progress,

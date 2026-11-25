@@ -6,6 +6,7 @@ import {
 const DEFAULTS = {
   mode: "anime", scale: 2, backend: "ai", denoise: "none", format: "mp4_h265", quality: "balanced",
   interpolation: false, image_format: "png", image_quality: 92, color_keep: true, finish: false,
+  detail_preserve: 0,
 };
 const VIDEO_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|ts|mts)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|tiff?)$/i;
@@ -67,6 +68,7 @@ function sync() {
   $('.seg-ctrl[data-key="backend"] button[data-v="ai"]').disabled = !eng.realesrgan;
   $("#colorKeep").checked = opts.color_keep;
   $("#colorKeep").disabled = opts.backend !== "ai";
+  for (const b of document.querySelectorAll('.seg-ctrl[data-key="detail_preserve"] button')) b.disabled = opts.backend !== "ai";
   if (images.length && opts.denoise === "temporal") opts.denoise = "none"; // images have no neighbouring frames
   if (opts.finish && opts.format === "mp4_h264") opts.format = "mp4_h265";
   $("#format option[value=mp4_h264]").disabled = opts.finish;
@@ -227,7 +229,7 @@ async function init() {
       const b = e.target.closest("button");
       if (!b || b.disabled) return;
       const key = group.dataset.key;
-      opts[key] = key === "scale" ? +b.dataset.v : b.dataset.v;
+      opts[key] = key === "scale" || key === "detail_preserve" ? +b.dataset.v : b.dataset.v;
       sync();
     });
   }

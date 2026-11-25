@@ -56,6 +56,16 @@
               </div>
               <label for="colorKeep">색감</label>
               <label class="check"><input type="checkbox" id="colorKeep"> 원본 색 유지 · AI가 밝게 바꾼 톤과 색을 원본에 맞춤</label>
+              <label id="lblDetail" class="vid-only">원본 보존</label>
+              <div class="stack vid-only" style="gap:4px">
+                <div class="seg-ctrl" role="group" aria-labelledby="lblDetail" data-key="detail_preserve">
+                  <button type="button" data-v="0">사용 안 함</button>
+                  <button type="button" data-v="30">원본 30%</button>
+                  <button type="button" data-v="50">원본 50%</button>
+                  <button type="button" data-v="70">원본 70%</button>
+                </div>
+                <span class="muted" style="font-size:12px">AI 결과에 원본 확대본을 섞음 · 가는 선 형태 보존, 비율이 높을수록 덜 선명하고 원본 노이즈가 돌아옴</span>
+              </div>
               <label id="lblDenoise">노이즈 제거</label>
               <div class="seg-ctrl" role="group" aria-labelledby="lblDenoise" data-key="denoise">
                 <button type="button" data-v="none">사용 안 함</button>
